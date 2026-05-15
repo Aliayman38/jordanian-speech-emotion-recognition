@@ -3,7 +3,6 @@ import torchaudio.transforms as T
 
 class CNNSpectrogramExtractor:
     def __init__(self, sr=16000, n_mels=128, n_fft=1024, hop_length=512):
-        # تعريف المحول هنا باسم mel_transform
         self.mel_transform = T.MelSpectrogram(
             sample_rate=sr,
             n_fft=n_fft,
