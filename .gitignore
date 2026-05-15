@@ -1,0 +1,13 @@
+﻿Dataset/
+*.wav
+*.mp3
+__pycache__/
+*.pyc
+.env
+venv/
+outputs/figures/*
+outputs/logs/*
+outputs/checkpoints/*
+!outputs/figures/.gitkeep
+!outputs/logs/.gitkeep
+!outputs/checkpoints/.gitkeep
