@@ -24,8 +24,6 @@ class EmotionCNN(nn.Module):
         )
         
         # 3. Classification Head
-        # استخدمنا 128 لأن 64 * 2 (Bidirectional) = 128
-        # إذا طلع معك 136 مرة ثانية، الكود تحت رح يعالج الموضوع
         self.fc = nn.Sequential(
             nn.Linear(128, 64), 
             nn.BatchNorm1d(64),
@@ -46,13 +44,9 @@ class EmotionCNN(nn.Module):
         # LSTM Output
         lstm_out, _ = self.lstm(x) 
         
-        # نأخذ آخر خطوة زمنية
         x = lstm_out[:, -1, :] 
 
-        # --- سطر الأمان ---
-        # إذا الأبعاد مش 128، هاد السطر بعدلها غصب عنها قبل الـ FC
         if x.shape[1] != 128:
-            # إعادة تحجيم ديناميكي للحالة الطارئة
             dynamic_pool = nn.Linear(x.shape[1], 128).to(x.device)
             x = dynamic_pool(x)
 
