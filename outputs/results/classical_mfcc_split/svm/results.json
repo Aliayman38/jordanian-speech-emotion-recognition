@@ -1,0 +1,32 @@
+{
+  "model": "svm",
+  "val_acc": 0.7229,
+  "test_acc": 0.7133,
+  "classification_report": "              precision    recall  f1-score   support\n\n       Happy     0.6283    0.6893    0.6574       103\n         Sad     0.7103    0.7037    0.7070       108\n       Angry     0.7449    0.7228    0.7337       101\n     Neutral     0.7835    0.7379    0.7600       103\n\n    accuracy                         0.7133       415\n   macro avg     0.7168    0.7134    0.7145       415\nweighted avg     0.7165    0.7133    0.7143       415\n",
+  "confusion_matrix": [
+    [
+      71,
+      11,
+      14,
+      7
+    ],
+    [
+      16,
+      76,
+      6,
+      10
+    ],
+    [
+      17,
+      7,
+      73,
+      4
+    ],
+    [
+      9,
+      13,
+      5,
+      76
+    ]
+  ]
+}

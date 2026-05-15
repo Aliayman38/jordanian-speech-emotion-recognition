@@ -1,0 +1,36 @@
+{
+  "model": "svm",
+  "best_val_acc": 0.7373,
+  "test_acc": 0.7157,
+  "best_params": {
+    "C": 5,
+    "gamma": "scale"
+  },
+  "classification_report": "              precision    recall  f1-score   support\n\n       Happy     0.6404    0.7087    0.6728       103\n         Sad     0.7075    0.6944    0.7009       108\n       Angry     0.7500    0.7129    0.7310       101\n     Neutral     0.7778    0.7476    0.7624       103\n\n    accuracy                         0.7157       415\n   macro avg     0.7189    0.7159    0.7168       415\nweighted avg     0.7186    0.7157    0.7165       415\n",
+  "confusion_matrix": [
+    [
+      73,
+      11,
+      13,
+      6
+    ],
+    [
+      17,
+      75,
+      6,
+      10
+    ],
+    [
+      16,
+      7,
+      72,
+      6
+    ],
+    [
+      8,
+      13,
+      5,
+      77
+    ]
+  ]
+}

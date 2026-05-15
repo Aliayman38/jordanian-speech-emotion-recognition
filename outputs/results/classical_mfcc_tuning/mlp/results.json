@@ -1,0 +1,39 @@
+{
+  "model": "mlp",
+  "best_val_acc": 0.7181,
+  "test_acc": 0.6747,
+  "best_params": {
+    "alpha": 0.0001,
+    "hidden_layer_sizes": [
+      256
+    ],
+    "learning_rate_init": 0.001
+  },
+  "classification_report": "              precision    recall  f1-score   support\n\n       Happy     0.5755    0.5922    0.5837       103\n         Sad     0.6952    0.6759    0.6854       108\n       Angry     0.6981    0.7327    0.7150       101\n     Neutral     0.7347    0.6990    0.7164       103\n\n    accuracy                         0.6747       415\n   macro avg     0.6759    0.6750    0.6751       415\nweighted avg     0.6760    0.6747    0.6751       415\n",
+  "confusion_matrix": [
+    [
+      61,
+      13,
+      18,
+      11
+    ],
+    [
+      19,
+      73,
+      7,
+      9
+    ],
+    [
+      15,
+      6,
+      74,
+      6
+    ],
+    [
+      11,
+      13,
+      7,
+      72
+    ]
+  ]
+}

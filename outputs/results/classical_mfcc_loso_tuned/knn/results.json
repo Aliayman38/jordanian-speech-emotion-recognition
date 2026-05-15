@@ -1,0 +1,280 @@
+{
+  "model": "knn",
+  "tuned_params": {
+    "metric": "manhattan",
+    "n_neighbors": 5,
+    "weights": "distance"
+  },
+  "mean_loso_accuracy": 0.4084,
+  "std_loso_accuracy": 0.1187,
+  "overall_sample_accuracy": 0.4195,
+  "best_fold": 0.6429,
+  "worst_fold": 0.1935,
+  "n_folds": 33,
+  "fold_results": [
+    {
+      "fold": 1,
+      "test_speaker": 1,
+      "n_train": 2705,
+      "n_test": 60,
+      "accuracy": 0.5,
+      "time_sec": 1.56
+    },
+    {
+      "fold": 2,
+      "test_speaker": 2,
+      "n_train": 2665,
+      "n_test": 100,
+      "accuracy": 0.58,
+      "time_sec": 0.02
+    },
+    {
+      "fold": 3,
+      "test_speaker": 3,
+      "n_train": 2665,
+      "n_test": 100,
+      "accuracy": 0.33,
+      "time_sec": 0.02
+    },
+    {
+      "fold": 4,
+      "test_speaker": 4,
+      "n_train": 2665,
+      "n_test": 100,
+      "accuracy": 0.4,
+      "time_sec": 0.02
+    },
+    {
+      "fold": 5,
+      "test_speaker": 5,
+      "n_train": 2667,
+      "n_test": 98,
+      "accuracy": 0.3776,
+      "time_sec": 0.01
+    },
+    {
+      "fold": 6,
+      "test_speaker": 6,
+      "n_train": 2667,
+      "n_test": 98,
+      "accuracy": 0.398,
+      "time_sec": 0.01
+    },
+    {
+      "fold": 7,
+      "test_speaker": 7,
+      "n_train": 2627,
+      "n_test": 138,
+      "accuracy": 0.6304,
+      "time_sec": 0.03
+    },
+    {
+      "fold": 8,
+      "test_speaker": 8,
+      "n_train": 2665,
+      "n_test": 100,
+      "accuracy": 0.3,
+      "time_sec": 0.02
+    },
+    {
+      "fold": 9,
+      "test_speaker": 9,
+      "n_train": 2683,
+      "n_test": 82,
+      "accuracy": 0.4146,
+      "time_sec": 0.01
+    },
+    {
+      "fold": 10,
+      "test_speaker": 10,
+      "n_train": 2725,
+      "n_test": 40,
+      "accuracy": 0.275,
+      "time_sec": 0.01
+    },
+    {
+      "fold": 11,
+      "test_speaker": 11,
+      "n_train": 2725,
+      "n_test": 40,
+      "accuracy": 0.375,
+      "time_sec": 0.01
+    },
+    {
+      "fold": 12,
+      "test_speaker": 12,
+      "n_train": 2734,
+      "n_test": 31,
+      "accuracy": 0.1935,
+      "time_sec": 0.01
+    },
+    {
+      "fold": 13,
+      "test_speaker": 13,
+      "n_train": 2705,
+      "n_test": 60,
+      "accuracy": 0.2167,
+      "time_sec": 0.01
+    },
+    {
+      "fold": 14,
+      "test_speaker": 14,
+      "n_train": 2685,
+      "n_test": 80,
+      "accuracy": 0.4375,
+      "time_sec": 0.01
+    },
+    {
+      "fold": 15,
+      "test_speaker": 15,
+      "n_train": 2687,
+      "n_test": 78,
+      "accuracy": 0.4744,
+      "time_sec": 0.01
+    },
+    {
+      "fold": 16,
+      "test_speaker": 16,
+      "n_train": 2637,
+      "n_test": 128,
+      "accuracy": 0.3516,
+      "time_sec": 0.01
+    },
+    {
+      "fold": 17,
+      "test_speaker": 17,
+      "n_train": 2726,
+      "n_test": 39,
+      "accuracy": 0.3077,
+      "time_sec": 0.01
+    },
+    {
+      "fold": 18,
+      "test_speaker": 18,
+      "n_train": 2737,
+      "n_test": 28,
+      "accuracy": 0.6429,
+      "time_sec": 0.01
+    },
+    {
+      "fold": 19,
+      "test_speaker": 19,
+      "n_train": 2657,
+      "n_test": 108,
+      "accuracy": 0.5463,
+      "time_sec": 0.02
+    },
+    {
+      "fold": 20,
+      "test_speaker": 20,
+      "n_train": 2715,
+      "n_test": 50,
+      "accuracy": 0.4,
+      "time_sec": 0.01
+    },
+    {
+      "fold": 21,
+      "test_speaker": 21,
+      "n_train": 2665,
+      "n_test": 100,
+      "accuracy": 0.46,
+      "time_sec": 0.02
+    },
+    {
+      "fold": 22,
+      "test_speaker": 22,
+      "n_train": 2647,
+      "n_test": 118,
+      "accuracy": 0.5593,
+      "time_sec": 0.02
+    },
+    {
+      "fold": 23,
+      "test_speaker": 23,
+      "n_train": 2711,
+      "n_test": 54,
+      "accuracy": 0.2222,
+      "time_sec": 0.01
+    },
+    {
+      "fold": 24,
+      "test_speaker": 24,
+      "n_train": 2665,
+      "n_test": 100,
+      "accuracy": 0.27,
+      "time_sec": 0.02
+    },
+    {
+      "fold": 25,
+      "test_speaker": 25,
+      "n_train": 2705,
+      "n_test": 60,
+      "accuracy": 0.3833,
+      "time_sec": 0.01
+    },
+    {
+      "fold": 26,
+      "test_speaker": 26,
+      "n_train": 2665,
+      "n_test": 100,
+      "accuracy": 0.32,
+      "time_sec": 0.02
+    },
+    {
+      "fold": 27,
+      "test_speaker": 27,
+      "n_train": 2660,
+      "n_test": 105,
+      "accuracy": 0.3048,
+      "time_sec": 0.02
+    },
+    {
+      "fold": 28,
+      "test_speaker": 28,
+      "n_train": 2665,
+      "n_test": 100,
+      "accuracy": 0.32,
+      "time_sec": 0.02
+    },
+    {
+      "fold": 29,
+      "test_speaker": 29,
+      "n_train": 2667,
+      "n_test": 98,
+      "accuracy": 0.4184,
+      "time_sec": 0.02
+    },
+    {
+      "fold": 30,
+      "test_speaker": 30,
+      "n_train": 2666,
+      "n_test": 99,
+      "accuracy": 0.4848,
+      "time_sec": 0.02
+    },
+    {
+      "fold": 31,
+      "test_speaker": 31,
+      "n_train": 2690,
+      "n_test": 75,
+      "accuracy": 0.6,
+      "time_sec": 0.02
+    },
+    {
+      "fold": 32,
+      "test_speaker": 32,
+      "n_train": 2663,
+      "n_test": 102,
+      "accuracy": 0.4608,
+      "time_sec": 0.02
+    },
+    {
+      "fold": 33,
+      "test_speaker": 33,
+      "n_train": 2669,
+      "n_test": 96,
+      "accuracy": 0.5208,
+      "time_sec": 0.02
+    }
+  ]
+}
