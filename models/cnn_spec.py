@@ -43,11 +43,7 @@ class EmotionCNN(nn.Module):
             dropout=0.5
         )
         
-<<<<<<< HEAD
         # Classification Head
-=======
-        # 3. Classification Head
->>>>>>> 329f0645d44dc6fede24278b7fdeed218a50548d
         self.fc = nn.Sequential(
             nn.Linear(128, 64), 
             nn.BatchNorm1d(64),
@@ -64,22 +60,15 @@ class EmotionCNN(nn.Module):
         x = x.view(batch_size, time, channels * freq) 
         
         lstm_out, _ = self.lstm(x) 
-<<<<<<< HEAD
         x = lstm_out[:, -1, :] 
 
         # Dynamic Reshaping Safety
-=======
-        
-        x = lstm_out[:, -1, :] 
-
->>>>>>> 329f0645d44dc6fede24278b7fdeed218a50548d
         if x.shape[1] != 128:
             dynamic_pool = nn.Linear(x.shape[1], 128).to(x.device)
             x = dynamic_pool(x)
 
         x = self.fc(x)
         return x
-<<<<<<< HEAD
 
 
 def run_loso_experiment():
@@ -187,5 +176,3 @@ def save_results(y_true, y_pred, accs):
 
 if __name__ == "__main__":
     run_loso_experiment()
-=======
->>>>>>> 329f0645d44dc6fede24278b7fdeed218a50548d
