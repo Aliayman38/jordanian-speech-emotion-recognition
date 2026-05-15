@@ -83,7 +83,18 @@ class JordanianSERDataset(Dataset):
         rel_path = self.file_rel_paths[idx]
         full_path = self.data_dir / rel_path
         
-        waveform, _ = torchaudio.load(str(full_path))
+        import soundfile as sf
+        import numpy as np
+
+# 1. Read the audio directly using soundfile (Bypasses torchaudio DLL issues entirely)
+        audio_data, sample_rate = sf.read(str(full_path))
+
+# 2. Convert from numpy array to PyTorch Tensor
+# soundfile returns shape (time,) or (time, channels). We need (1, time) for torchaudio transforms
+        if len(audio_data.shape) > 1:
+           audio_data = audio_data.mean(axis=1) # Convert to mono if it's stereo
+
+        waveform = torch.tensor(audio_data, dtype=torch.float32).unsqueeze(0)
         
         # Standardization to 4 seconds (64000 samples)
         target_length = 64000 
