@@ -98,7 +98,7 @@ def run_loso_experiment():
         
         # Training Phase
         dataset.transform = augmenter 
-        train_loader = DataLoader(train_set, batch_size=32, shuffle=True)
+        train_loader = DataLoader(train_set, batch_size=32, shuffle=True, drop_last=True)
         
         # Validation Phase
         dataset.transform = None 
