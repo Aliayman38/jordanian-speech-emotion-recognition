@@ -1,0 +1,89 @@
+{
+  "model": "wav2vec_v3_ens5",
+  "train_acc": 0.4562,
+  "train_f1": 0.4055,
+  "val_acc": 0.407,
+  "val_f1": 0.3483,
+  "test_acc": 0.3891,
+  "test_f1": 0.2863,
+  "best_params": {
+    "batch_size": 32,
+    "dropout": 0.8,
+    "epochs": 200,
+    "grad_clip": 1.0,
+    "grl_lambda": 1.0,
+    "hidden_dims": [
+      32
+    ],
+    "label_smoothing": 0.3,
+    "lr": 0.0001,
+    "min_lr": 1e-07,
+    "patience": 30,
+    "warmup_epochs": 10,
+    "weight_decay": 0.1
+  },
+  "per_seed_val": [
+    {
+      "seed": 42,
+      "val_f1": 0.3549,
+      "val_acc": 0.3933,
+      "epochs": 32,
+      "gap": 0.3091
+    },
+    {
+      "seed": 123,
+      "val_f1": 0.2898,
+      "val_acc": 0.3659,
+      "epochs": 31,
+      "gap": 0.2774
+    },
+    {
+      "seed": 7,
+      "val_f1": 0.297,
+      "val_acc": 0.3209,
+      "epochs": 31,
+      "gap": 0.28
+    },
+    {
+      "seed": 2025,
+      "val_f1": 0.3142,
+      "val_acc": 0.3444,
+      "epochs": 32,
+      "gap": 0.2861
+    },
+    {
+      "seed": 999,
+      "val_f1": 0.4331,
+      "val_acc": 0.456,
+      "epochs": 32,
+      "gap": 0.3146
+    }
+  ],
+  "classification_report": "              precision    recall  f1-score   support\n\n       Happy     0.0000    0.0000    0.0000        49\n         Sad     0.3817    0.6579    0.4831        76\n       Angry     0.4388    0.5244    0.4778        82\n     Neutral     0.2692    0.1400    0.1842        50\n\n    accuracy                         0.3891       257\n   macro avg     0.2724    0.3306    0.2863       257\nweighted avg     0.3052    0.3891    0.3311       257\n",
+  "confusion_matrix": [
+    [
+      0,
+      28,
+      19,
+      2
+    ],
+    [
+      2,
+      50,
+      21,
+      3
+    ],
+    [
+      0,
+      25,
+      43,
+      14
+    ],
+    [
+      0,
+      28,
+      15,
+      7
+    ]
+  ]
+}

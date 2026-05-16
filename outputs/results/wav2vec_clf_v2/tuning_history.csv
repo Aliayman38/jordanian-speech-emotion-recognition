@@ -1,0 +1,2 @@
+combo,val_acc,val_f1,epochs,time_sec,batch_size,dropout,grad_clip,grl_lambda,hidden_dims,label_smoothing,lr,min_lr,patience,spectral_norm,warmup_epochs,weight_decay
+1,0.6712,0.6673,150,18.45,32,0.7,1.0,1.0,[64],0.2,0.0005,1e-06,25,True,5,0.01

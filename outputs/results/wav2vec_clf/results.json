@@ -1,0 +1,79 @@
+{
+  "model": "wav2vec_mlp_ens5",
+  "train_acc": 0.9765,
+  "train_f1": 0.9762,
+  "val_acc": 0.6204,
+  "val_f1": 0.6108,
+  "test_acc": 0.5798,
+  "test_f1": 0.5343,
+  "best_params": {
+    "batch_size": 64,
+    "dropout": 0.6,
+    "epochs": 100,
+    "hidden_dims": [
+      128
+    ],
+    "lr": 0.0005,
+    "patience": 20,
+    "weight_decay": 0.001
+  },
+  "per_seed_val": [
+    {
+      "seed": 42,
+      "val_f1": 0.6255,
+      "val_acc": 0.6321,
+      "epochs": 71
+    },
+    {
+      "seed": 123,
+      "val_f1": 0.6073,
+      "val_acc": 0.6145,
+      "epochs": 80
+    },
+    {
+      "seed": 7,
+      "val_f1": 0.6078,
+      "val_acc": 0.6223,
+      "epochs": 94
+    },
+    {
+      "seed": 2025,
+      "val_f1": 0.6194,
+      "val_acc": 0.6282,
+      "epochs": 88
+    },
+    {
+      "seed": 999,
+      "val_f1": 0.6087,
+      "val_acc": 0.6184,
+      "epochs": 82
+    }
+  ],
+  "classification_report": "              precision    recall  f1-score   support\n\n       Happy     0.3418    0.5510    0.4219        49\n         Sad     0.5275    0.6316    0.5749        76\n       Angry     0.9143    0.7805    0.8421        82\n     Neutral     0.5882    0.2000    0.2985        50\n\n    accuracy                         0.5798       257\n   macro avg     0.5929    0.5408    0.5343       257\nweighted avg     0.6273    0.5798    0.5772       257\n",
+  "confusion_matrix": [
+    [
+      27,
+      18,
+      3,
+      1
+    ],
+    [
+      23,
+      48,
+      2,
+      3
+    ],
+    [
+      6,
+      9,
+      64,
+      3
+    ],
+    [
+      23,
+      16,
+      1,
+      10
+    ]
+  ]
+}
