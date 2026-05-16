@@ -52,6 +52,7 @@ def load_and_split_triple_data():
     labels = np.load(LABELS_PATH)
     speakers = np.load(SPEAKERS_PATH)
     
+    # Expected dimensions: 258 + 1024 + 128 = 1410
     fused_features = np.concatenate((mfcc_features, wav2vec_features, cnn_features), axis=1)
     
     train_spks_raw, val_spks_raw, test_spks_raw = get_stratified_speakers(METADATA_CSV_PATH)
@@ -70,39 +71,33 @@ def load_and_split_triple_data():
     
     print(f"[INFO] Modalities Merged. Total Features: {X_train.shape[1]}")
     print(f"[INFO] Train Samples: {X_train.shape[0]} | Val Samples: {X_val.shape[0]} | Test Samples: {X_test.shape[0]}")
-    
     return (X_train, y_train), (X_val, y_val), (X_test, y_test)
 
 # ==========================================
-# 3. DEEP NEURAL NETWORK ARCHITECTURE
+# 3. OPTIMIZED NEURAL NETWORK ARCHITECTURE
 # ==========================================
-class TripleFusionNet(nn.Module):
+class OptimizedFusionNet(nn.Module):
     def __init__(self, input_dim, num_classes=4):
-        super(TripleFusionNet, self).__init__()
+        super(OptimizedFusionNet, self).__init__()
         self.network = nn.Sequential(
-            nn.Linear(input_dim, 1024),
-            nn.BatchNorm1d(1024),
-            nn.ReLU(),
-            nn.Dropout(0.5), 
-            
-            nn.Linear(1024, 512),
+            nn.Linear(input_dim, 512),
             nn.BatchNorm1d(512),
             nn.ReLU(),
             nn.Dropout(0.4),
             
-            nn.Linear(512, 256),
-            nn.BatchNorm1d(256),
+            nn.Linear(512, 128),
+            nn.BatchNorm1d(128),
             nn.ReLU(),
             nn.Dropout(0.3),
             
-            nn.Linear(256, num_classes)
+            nn.Linear(128, num_classes)
         )
 
     def forward(self, x):
         return self.network(x)
 
 # ==========================================
-# 4. TRAINING & EVALUATION
+# 4. TRAINING & EVALUATION PIPELINE
 # ==========================================
 def train_triple_fusion():
     (X_train, y_train), (X_val, y_val), (X_test, y_test) = load_and_split_triple_data()
@@ -115,15 +110,15 @@ def train_triple_fusion():
     X_test = scaler.transform(X_test)
     
     BATCH_SIZE = 16
-    MAX_EPOCHS = 50
+    MAX_EPOCHS = 40
     
     train_loader = DataLoader(TensorDataset(torch.FloatTensor(X_train), torch.LongTensor(y_train)), batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
     val_loader = DataLoader(TensorDataset(torch.FloatTensor(X_val), torch.LongTensor(y_val)), batch_size=BATCH_SIZE, shuffle=False)
     test_loader = DataLoader(TensorDataset(torch.FloatTensor(X_test), torch.LongTensor(y_test)), batch_size=BATCH_SIZE, shuffle=False)
     
-    model = TripleFusionNet(input_dim=X_train.shape[1], num_classes=4).to(device)
+    model = OptimizedFusionNet(input_dim=X_train.shape[1], num_classes=4).to(device)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.AdamW(model.parameters(), lr=0.0001, weight_decay=0.01)
+    optimizer = optim.AdamW(model.parameters(), lr=0.0001, weight_decay=0.05)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
     
     best_val_acc = 0.0
@@ -171,7 +166,7 @@ def train_triple_fusion():
             best_val_acc = v_acc
             torch.save(model.state_dict(), model_path)
             
-        if (epoch+1) % 10 == 0:
+        if (epoch+1) % 5 == 0 or epoch == 0:
             print(f"Epoch [{epoch+1:02d}/{MAX_EPOCHS}] | Train Acc: {t_accs[-1]:.2f}% | Val Acc: {v_accs[-1]:.2f}%")
             
     print("\n[SYSTEM] Evaluating Best Triple Fusion Model on Held-Out Test Set...")
