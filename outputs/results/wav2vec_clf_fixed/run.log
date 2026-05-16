@@ -1,0 +1,44 @@
+16:36:02 | INFO     | SER WAV2VEC Fixed | Smart Early Stopping + Per-Epoch Logging
+16:36:02 | INFO     | Device: cuda | Feature dir: outputs/features/wav2vec_stats
+16:36:02 | INFO     | Indexed 2765 embeddings from outputs/features/wav2vec_stats
+16:36:03 | INFO     | Train: 2001 | Val: 399 | Test: 365 | Speakers: 33
+16:36:03 | INFO     | ======================================================================
+16:36:03 | INFO     | BEST PARAMS (1 combo) | seed=42 | emb_dim=6144
+16:36:03 | INFO     | ======================================================================
+16:36:10 | INFO     | [1/1] valF1=0.5352 valAcc=0.5514 epochs=26 | 8.0s
+16:36:10 | INFO     | ======================================================================
+16:36:10 | INFO     | Ensemble | 5 seeds: [42, 123, 7, 2025, 999]
+16:36:10 | INFO     | ======================================================================
+16:36:18 | INFO     | [seed   42] valF1=0.5352 valAcc=0.5514 epochs=26 | 7.4s
+16:36:24 | INFO     | [seed  123] valF1=0.5444 valAcc=0.5464 epochs=21 | 5.8s
+16:36:29 | INFO     | [seed    7] valF1=0.5422 valAcc=0.5439 epochs=21 | 5.7s
+16:36:35 | INFO     | [seed 2025] valF1=0.5270 valAcc=0.5288 epochs=21 | 5.8s
+16:36:42 | INFO     | [seed  999] valF1=0.5459 valAcc=0.5489 epochs=23 | 6.4s
+16:36:42 | INFO     | ----------------------------------------------------------------------
+16:36:42 | INFO     | FINAL (5-seed ensemble)
+16:36:42 | INFO     | Split      Accuracy    MacroF1
+16:36:42 | INFO     | Train        0.9610     0.9602
+16:36:42 | INFO     | Val            0.5589     0.5559
+16:36:42 | INFO     | Test          0.5315     0.5284
+16:36:42 | INFO     | Gap (train→test): +0.4295 acc | +0.4317 F1
+16:36:42 | INFO     | Best Params: {'batch_size': 32, 'dropout': 0.7, 'epochs': 150, 'grad_clip': 1.0, 'grl_lambda': 1.0, 'hidden_dims': (64,), 'label_smoothing': 0.2, 'lr': 0.0005, 'min_lr': 1e-06, 'patience': 25, 'spectral_norm': True, 'warmup_epochs': 5, 'weight_decay': 0.01}
+16:36:42 | INFO     |   seed=  42 | valF1=0.5352 | valAcc=0.5514 | epochs=26
+16:36:42 | INFO     |   seed= 123 | valF1=0.5444 | valAcc=0.5464 | epochs=21
+16:36:42 | INFO     |   seed=   7 | valF1=0.5422 | valAcc=0.5439 | epochs=21
+16:36:42 | INFO     |   seed=2025 | valF1=0.5270 | valAcc=0.5288 | epochs=21
+16:36:42 | INFO     |   seed= 999 | valF1=0.5459 | valAcc=0.5489 | epochs=23
+16:36:42 | INFO     | 
+Test-set classification report:
+              precision    recall  f1-score   support
+
+       Happy     0.4494    0.4396    0.4444        91
+         Sad     0.5000    0.6489    0.5648        94
+       Angry     0.5490    0.6222    0.5833        90
+     Neutral     0.7115    0.4111    0.5211        90
+
+    accuracy                         0.5315       365
+   macro avg     0.5525    0.5305    0.5284       365
+weighted avg     0.5516    0.5315    0.5286       365
+
+16:36:42 | INFO     | Saved results → /home/mohammad/SPEECH-EMOTION-RECOGNITION/jordanian-speech-emotion-recognition/outputs/results/wav2vec_clf_fixed
+16:36:42 | INFO     | Done. Results in /home/mohammad/SPEECH-EMOTION-RECOGNITION/jordanian-speech-emotion-recognition/outputs/results/wav2vec_clf_fixed

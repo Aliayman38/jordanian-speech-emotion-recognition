@@ -1,289 +1,176 @@
-from pathlib import Path
-import sys, json, logging, time, warnings
+"""
+experiments/clusterer.py — Speaker-independent splits with robust stratification.
 
+Handles edge cases where some emotion classes have too few speakers
+for sklearn's StratifiedShuffleSplit.
+"""
+
+from pathlib import Path
 import numpy as np
 import pandas as pd
-
-from sklearn.model_selection import ParameterGrid
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-from sklearn.svm import SVC
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.neural_network import MLPClassifier
-
-warnings.filterwarnings("ignore")
-
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.append(str(ROOT))
-
-from experiments.clusterer import get_stratified_speakers
-
-FEATURES_CSV = ROOT / "outputs" / "features" / "mfcc_features_loso.csv"
-METADATA_CSV = ROOT / "data" / "metadata.csv"
-RESULTS_DIR = ROOT / "outputs" / "results" / "classical_cluster_tuning"
+from collections import Counter
 
 RANDOM_STATE = 42
-META_COLS = {"rel_path", "label", "speaker_id", "gender"}
-EMOTION_NAMES = ["Happy", "Sad", "Angry", "Neutral"]
 
 
-def get_logger():
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)-8s | %(message)s",
-        datefmt="%H:%M:%S",
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler(RESULTS_DIR / "run.log", encoding="utf-8"),
-        ],
-    )
-    return logging.getLogger("SER_CLUSTER_TUNING")
+def get_stratified_speakers(metadata_csv: Path):
+    """
+    Return three disjoint speaker-id sets for train/val/test.
+
+    Strategy:
+        1. Group speakers by dominant emotion label
+        2. Allocate proportionally from each group to maintain label balance
+        3. If a group has <2 speakers, merge it with similar groups
+
+    Target ratios: ~70% train / 15% val / 15% test (speaker-level)
+    """
+    meta = pd.read_csv(metadata_csv)
+
+    # Per-speaker dominant label
+    speaker_dominant = {}
+    speaker_samples = {}
+    for spk_id, group in meta.groupby("speaker_id"):
+        labels = group["label"].values
+        dominant = Counter(labels).most_common(1)[0][0]
+        speaker_dominant[spk_id] = dominant
+        speaker_samples[spk_id] = len(labels)
+
+    all_speakers = list(speaker_dominant.keys())
+    n_total = len(all_speakers)
+
+    # Target counts
+    n_train = max(1, int(round(n_total * 0.70)))
+    n_val = max(1, int(round(n_total * 0.15)))
+    n_test = max(1, n_total - n_train - n_val)
+
+    # Adjust for rounding
+    while n_train + n_val + n_test > n_total:
+        if n_train > n_val and n_train > n_test:
+            n_train -= 1
+        elif n_val > n_test:
+            n_val -= 1
+        else:
+            n_test -= 1
+    while n_train + n_val + n_test < n_total:
+        n_train += 1
+
+    # Group by dominant label
+    label_groups = {}
+    for spk, lbl in speaker_dominant.items():
+        label_groups.setdefault(lbl, []).append(spk)
+
+    np.random.seed(RANDOM_STATE)
+
+    # Shuffle within each group
+    for lbl in label_groups:
+        spks = label_groups[lbl]
+        np.random.shuffle(spks)
+        label_groups[lbl] = spks
+
+    # Proportional allocation
+    train_speakers, val_speakers, test_speakers = [], [], []
+
+    for lbl, spks in sorted(label_groups.items()):
+        n_spks = len(spks)
+        # Allocate ~70/15/15 within this label group
+        n_tr = max(0, int(round(n_spks * 0.70)))
+        n_va = max(0, int(round(n_spks * 0.15)))
+        n_te = n_spks - n_tr - n_va
+
+        # Ensure at least 1 per split if group is large enough
+        if n_spks >= 3:
+            if n_tr == 0: n_tr = 1; n_te -= 1
+            if n_va == 0: n_va = 1; n_te -= 1
+            if n_te == 0: n_te = 1; n_tr -= 1
+            # Rebalance if negative
+            if n_tr < 1: n_tr = 1; n_va = max(1, n_spks - n_tr - n_te)
+            if n_va < 1: n_va = 1; n_tr = max(1, n_spks - n_va - n_te)
+            if n_te < 1: n_te = 1; n_tr = max(1, n_spks - n_va - n_te)
+        elif n_spks == 2:
+            # 1 to train, 1 to val (test gets from another group)
+            n_tr, n_va, n_te = 1, 1, 0
+        else:
+            # Single speaker — give to train
+            n_tr, n_va, n_te = 1, 0, 0
+
+        train_speakers.extend(spks[:n_tr])
+        val_speakers.extend(spks[n_tr:n_tr + n_va])
+        test_speakers.extend(spks[n_tr + n_va:])
+
+    # --- Balance to exact counts ---
+    def balance(target, others, target_count):
+        while len(target) > target_count and others:
+            other_lens = [len(o) for o in others]
+            min_idx = other_lens.index(min(other_lens))
+            others[min_idx].append(target.pop())
+        while len(target) < target_count and others:
+            other_lens = [len(o) for o in others]
+            max_idx = other_lens.index(max(other_lens))
+            if len(others[max_idx]) > 1:
+                target.append(others[max_idx].pop())
+            else:
+                break
+        return target, others
+
+    all_lists = [train_speakers, val_speakers, test_speakers]
+    targets = [n_train, n_val, n_test]
+
+    for _ in range(10):
+        changed = False
+        for i in range(3):
+            others = [all_lists[j] for j in range(3) if j != i]
+            old_len = len(all_lists[i])
+            all_lists[i], others = balance(all_lists[i], others, targets[i])
+            idx = 0
+            for j in range(3):
+                if j != i:
+                    all_lists[j] = others[idx]
+                    idx += 1
+            if len(all_lists[i]) != old_len:
+                changed = True
+        if not changed:
+            break
+
+    train_speakers, val_speakers, test_speakers = [sorted(s) for s in all_lists]
+
+    # Verify
+    assert len(set(train_speakers) & set(val_speakers)) == 0, "Overlap!"
+    assert len(set(train_speakers) & set(test_speakers)) == 0, "Overlap!"
+    assert len(set(val_speakers) & set(test_speakers)) == 0, "Overlap!"
+    all_assigned = set(train_speakers) | set(val_speakers) | set(test_speakers)
+    assert all_assigned == set(all_speakers), f"Missing: {set(all_speakers) - all_assigned}"
+
+    return train_speakers, val_speakers, test_speakers
 
 
-def load_features(log):
-    df = pd.read_csv(FEATURES_CSV).dropna()
-    feature_cols = [c for c in df.columns if c not in META_COLS]
-
-    train_spks, val_spks, test_spks = get_stratified_speakers(METADATA_CSV)
-
-    train_df = df[df["speaker_id"].isin(train_spks)]
-    val_df = df[df["speaker_id"].isin(val_spks)]
-    test_df = df[df["speaker_id"].isin(test_spks)]
-
-    X_train = train_df[feature_cols].to_numpy(dtype=np.float32)
-    y_train = train_df["label"].to_numpy(dtype=int)
-
-    X_val = val_df[feature_cols].to_numpy(dtype=np.float32)
-    y_val = val_df["label"].to_numpy(dtype=int)
-
-    X_test = test_df[feature_cols].to_numpy(dtype=np.float32)
-    y_test = test_df["label"].to_numpy(dtype=int)
-
-    log.info(f"Features: {len(feature_cols)}")
-    log.info(f"Train speakers: {train_spks}")
-    log.info(f"Val speakers  : {val_spks}")
-    log.info(f"Test speakers : {test_spks}")
-    log.info(f"Train samples : {len(y_train)}")
-    log.info(f"Val samples   : {len(y_val)}")
-    log.info(f"Test samples  : {len(y_test)}")
-
-    return X_train, X_val, X_test, y_train, y_val, y_test
-
-
-def make_model(name, params):
-    if name == "svm":
-        clf = SVC(
-            kernel="rbf",
-            C=params["C"],
-            gamma=params["gamma"],
-            class_weight="balanced",
-            random_state=RANDOM_STATE,
-        )
-
-    elif name == "knn":
-        clf = KNeighborsClassifier(
-            n_neighbors=params["n_neighbors"],
-            weights=params["weights"],
-            metric=params["metric"],
-            n_jobs=-1,
-        )
-
-    elif name == "mlp":
-        clf = MLPClassifier(
-            hidden_layer_sizes=params["hidden_layer_sizes"],
-            alpha=params["alpha"],
-            learning_rate_init=params["learning_rate_init"],
-            activation="relu",
-            solver="adam",
-            batch_size=64,
-            max_iter=500,
-            early_stopping=True,
-            validation_fraction=0.1,
-            n_iter_no_change=15,
-            random_state=RANDOM_STATE,
-        )
-
-    else:
-        raise ValueError(f"Unknown model: {name}")
-
-    return Pipeline([
-        ("scaler", StandardScaler()),
-        ("clf", clf),
-    ])
-
-
-def get_grids():
-    return {
-        "svm": {
-            "C": [1, 5, 10, 20, 50, 100],
-            "gamma": ["scale", 0.01, 0.005, 0.001],
-        },
-        "knn": {
-            "n_neighbors": [3, 5, 7, 9, 11, 15],
-            "weights": ["uniform", "distance"],
-            "metric": ["euclidean", "manhattan"],
-        },
-        "mlp": {
-            "hidden_layer_sizes": [(128,), (256,), (256, 128), (128, 64)],
-            "alpha": [1e-4, 1e-3, 1e-2],
-            "learning_rate_init": [1e-3, 5e-4],
-        },
-    }
-
-
-def tune_model(name, grid, X_train, y_train, X_val, y_val, log):
-    best_acc = -1
-    best_model = None
-    best_params = None
-    history = []
-
-    combos = list(ParameterGrid(grid))
-
-    log.info("=" * 70)
-    log.info(f"Tuning {name.upper()} | {len(combos)} combinations")
-    log.info("=" * 70)
-
-    for i, params in enumerate(combos, start=1):
-        start = time.time()
-
-        model = make_model(name, params)
-        model.fit(X_train, y_train)
-
-        val_pred = model.predict(X_val)
-        val_acc = accuracy_score(y_val, val_pred)
-        elapsed = time.time() - start
-
-        row = {
-            "model": name,
-            "combo": i,
-            "val_acc": round(float(val_acc), 4),
-            "time_sec": round(elapsed, 2),
-            **params,
-        }
-        history.append(row)
-
-        log.info(
-            f"{name.upper()} [{i:02d}/{len(combos)}] "
-            f"Val={val_acc:.4f} | Params={params} | {elapsed:.1f}s"
-        )
-
-        if val_acc > best_acc:
-            best_acc = val_acc
-            best_model = model
-            best_params = params
-
-    log.info(f"BEST {name.upper()} | Val={best_acc:.4f} | Params={best_params}")
-    return best_model, best_params, best_acc, history
-
-
-def evaluate_test(name, model, best_params, best_val, X_test, y_test, log):
-    test_pred = model.predict(X_test)
-    test_acc = accuracy_score(y_test, test_pred)
-
-    report = classification_report(
-        y_test,
-        test_pred,
-        target_names=EMOTION_NAMES,
-        digits=4,
-        zero_division=0,
-    )
-
-    cm = confusion_matrix(y_test, test_pred)
-
-    log.info("-" * 70)
-    log.info(f"{name.upper()} FINAL")
-    log.info(f"Best Validation Accuracy: {best_val:.4f}")
-    log.info(f"Test Accuracy           : {test_acc:.4f}")
-    log.info(f"Best Params             : {best_params}")
-
-    return {
-        "model": name,
-        "best_val_acc": round(float(best_val), 4),
-        "test_acc": round(float(test_acc), 4),
-        "best_params": best_params,
-        "classification_report": report,
-        "confusion_matrix": cm.tolist(),
-    }
-
-
-def save_results(results, histories, log):
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-
-    summary_rows = []
-
-    for res in results:
-        model_dir = RESULTS_DIR / res["model"]
-        model_dir.mkdir(parents=True, exist_ok=True)
-
-        with open(model_dir / "results.json", "w", encoding="utf-8") as f:
-            json.dump(res, f, indent=2)
-
-        with open(model_dir / "classification_report.txt", "w", encoding="utf-8") as f:
-            f.write(res["classification_report"])
-
-        pd.DataFrame(res["confusion_matrix"]).to_csv(
-            model_dir / "confusion_matrix.csv",
-            index=False,
-        )
-
-        summary_rows.append({
-            "model": res["model"].upper(),
-            "best_val_acc": res["best_val_acc"],
-            "test_acc": res["test_acc"],
-            "best_params": str(res["best_params"]),
-        })
-
-    for model_name, hist in histories.items():
-        pd.DataFrame(hist).sort_values(
-            "val_acc", ascending=False
-        ).to_csv(RESULTS_DIR / f"{model_name}_tuning_history.csv", index=False)
-
-    summary = pd.DataFrame(summary_rows).sort_values("best_val_acc", ascending=False)
-    summary.to_csv(RESULTS_DIR / "summary.csv", index=False)
-
-    log.info("\nFINAL SUMMARY")
-    log.info(summary)
-    log.info(f"Saved to: {RESULTS_DIR}")
-
-
-def main():
-    log = get_logger()
-    log.info("SER Classical ML | Speaker-Based Cluster Split Tuning")
-
-    X_train, X_val, X_test, y_train, y_val, y_test = load_features(log)
-
-    results = []
-    histories = {}
-
-    for name, grid in get_grids().items():
-        best_model, best_params, best_val, history = tune_model(
-            name,
-            grid,
-            X_train,
-            y_train,
-            X_val,
-            y_val,
-            log,
-        )
-
-        histories[name] = history
-
-        result = evaluate_test(
-            name,
-            best_model,
-            best_params,
-            best_val,
-            X_test,
-            y_test,
-            log,
-        )
-
-        results.append(result)
-
-    save_results(results, histories, log)
+get_speaker_splits = get_stratified_speakers
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    this_dir = Path(__file__).resolve().parent
+    project_root = this_dir.parent
+    candidates = [project_root / "data" / "metadata.csv", Path("data/metadata.csv"), Path("../data/metadata.csv")]
+    meta_path = None
+    for c in candidates:
+        if c.exists():
+            meta_path = c
+            break
+    if meta_path is None and len(sys.argv) > 1:
+        meta_path = Path(sys.argv[1])
+    if meta_path is None:
+        print("Usage: python -m experiments.clusterer <metadata.csv>")
+        sys.exit(1)
+
+    print(f"Using: {meta_path}")
+    train, val, test = get_stratified_speakers(meta_path)
+    meta = pd.read_csv(meta_path)
+    n_total = meta["speaker_id"].nunique()
+
+    print(f"\nTotal: {n_total} speakers")
+    for name, spks in [("Train", train), ("Val", val), ("Test", test)]:
+        samples = len(meta[meta["speaker_id"].isin(spks)])
+        print(f"{name:6}: {len(spks)} speakers ({len(spks)/n_total*100:.1f}%) → {samples} samples")
+    print(f"\nTrain: {train}")
+    print(f"Val:   {val}")
+    print(f"Test:  {test}")
