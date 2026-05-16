@@ -8,68 +8,87 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from torch.utils.data import DataLoader, TensorDataset
-from sklearn.model_selection import LeaveOneGroupOut, train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import confusion_matrix, classification_report, accuracy_score
 
 # ==========================================
 # 1. PATH CONFIGURATION
 # ==========================================
-MFCC_CSV_PATH = r"C:\Users\Ali83\jordanian-speech-emotion-recognition\outputs\features\mfcc_features_loso.csv"
-WAV2VEC_NPY_PATH = r"C:\Users\Ali83\jordanian-speech-emotion-recognition\outputs\features\wav2vec_features.npy"
-CNN_NPY_PATH = r"C:\Users\Ali83\jordanian-speech-emotion-recognition\outputs\features\cnn_features.npy" # New!
-LABELS_PATH = r"C:\Users\Ali83\jordanian-speech-emotion-recognition\outputs\features\labels.npy"
-SPEAKERS_PATH = r"C:\Users\Ali83\jordanian-speech-emotion-recognition\outputs\features\speakers.npy"
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.abspath(os.path.join(current_dir, '..'))
+if parent_dir not in sys.path:
+    sys.path.append(parent_dir)
 
-OUTPUT_DIR = r"C:\Users\Ali83\jordanian-speech-emotion-recognition\outputs"
+from experiments.clusterer import get_stratified_speakers
+
+METADATA_CSV_PATH = os.path.join(parent_dir, "data", "metadata.csv")
+MFCC_CSV_PATH = os.path.join(parent_dir, "outputs", "features", "mfcc_features_loso.csv")
+WAV2VEC_NPY_PATH = os.path.join(parent_dir, "outputs", "features", "wav2vec_features.npy")
+CNN_NPY_PATH = os.path.join(parent_dir, "outputs", "features", "cnn_features.npy")
+LABELS_PATH = os.path.join(parent_dir, "outputs", "features", "labels.npy")
+SPEAKERS_PATH = os.path.join(parent_dir, "outputs", "features", "speakers.npy")
+
+OUTPUT_DIR = os.path.join(parent_dir, "outputs")
 FIGURES_DIR = os.path.join(OUTPUT_DIR, "figures")
 LOGS_DIR = os.path.join(OUTPUT_DIR, "logs")
 CHECKPOINTS_DIR = os.path.join(OUTPUT_DIR, "checkpoints")
 
-os.makedirs(FIGURES_DIR, exist_ok=True)
-os.makedirs(LOGS_DIR, exist_ok=True)
-os.makedirs(CHECKPOINTS_DIR, exist_ok=True)
+# ==========================================
+# 2. DATA LOADING & STRATIFIED SPLIT
+# ==========================================
+def clean_speaker_id(spk_id):
+    try:
+        return int(str(spk_id).split('_')[-1])
+    except ValueError:
+        return hash(spk_id)
 
-# ==========================================
-# 2. FEATURE FUSION (3 Modalities)
-# ==========================================
-def load_and_fuse_features():
-    print("[SYSTEM] Loading MFCC, Wav2Vec2, and CNN Features...")
+def load_and_split_triple_data():
+    print("[SYSTEM] Loading 3 Modalities and applying 70/15/15 Clusterer Split...")
     
-    # 1. Load MFCC
     df_mfcc = pd.read_csv(MFCC_CSV_PATH)
     mfcc_features = df_mfcc.drop(columns=['rel_path', 'label', 'speaker_id', 'gender']).values
-    
-    # 2. Load Wav2Vec2, CNN, Labels, and Speakers
     wav2vec_features = np.load(WAV2VEC_NPY_PATH)
     cnn_features = np.load(CNN_NPY_PATH)
     labels = np.load(LABELS_PATH)
     speakers = np.load(SPEAKERS_PATH)
     
-    # Validation Check
-    if not (mfcc_features.shape[0] == wav2vec_features.shape[0] == cnn_features.shape[0]):
-        raise ValueError("[ERROR] Dimension mismatch! All feature files must have the same number of audio samples.")
-        
-    print(f"[INFO] MFCC Dim: {mfcc_features.shape[1]} | Wav2Vec Dim: {wav2vec_features.shape[1]} | CNN Dim: {cnn_features.shape[1]}")
-    
-    # 3. Concatenate all 3 modalities
     fused_features = np.concatenate((mfcc_features, wav2vec_features, cnn_features), axis=1)
-    print(f"[SUCCESS] Final Fused Shape (Samples, Features): {fused_features.shape}")
     
-    return fused_features, labels, speakers
+    train_spks_raw, val_spks_raw, test_spks_raw = get_stratified_speakers(METADATA_CSV_PATH)
+    
+    train_spks = [clean_speaker_id(s) for s in train_spks_raw]
+    val_spks = [clean_speaker_id(s) for s in val_spks_raw]
+    test_spks = [clean_speaker_id(s) for s in test_spks_raw]
+    
+    train_idx = np.isin(speakers, train_spks)
+    val_idx = np.isin(speakers, val_spks)
+    test_idx = np.isin(speakers, test_spks)
+    
+    X_train, y_train = fused_features[train_idx], labels[train_idx]
+    X_val, y_val = fused_features[val_idx], labels[val_idx]
+    X_test, y_test = fused_features[test_idx], labels[test_idx]
+    
+    print(f"[INFO] Modalities Merged. Total Features: {X_train.shape[1]}")
+    print(f"[INFO] Train Samples: {X_train.shape[0]} | Val Samples: {X_val.shape[0]} | Test Samples: {X_test.shape[0]}")
+    
+    return (X_train, y_train), (X_val, y_val), (X_test, y_test)
 
 # ==========================================
-# 3. NEURAL NETWORK ARCHITECTURE
+# 3. DEEP NEURAL NETWORK ARCHITECTURE
 # ==========================================
 class TripleFusionNet(nn.Module):
     def __init__(self, input_dim, num_classes=4):
         super(TripleFusionNet, self).__init__()
-        # Dynamic input_dim based on the concatenated features
         self.network = nn.Sequential(
-            nn.Linear(input_dim, 512),
+            nn.Linear(input_dim, 1024),
+            nn.BatchNorm1d(1024),
+            nn.ReLU(),
+            nn.Dropout(0.5), 
+            
+            nn.Linear(1024, 512),
             nn.BatchNorm1d(512),
             nn.ReLU(),
-            nn.Dropout(0.3),
+            nn.Dropout(0.4),
             
             nn.Linear(512, 256),
             nn.BatchNorm1d(256),
@@ -83,140 +102,127 @@ class TripleFusionNet(nn.Module):
         return self.network(x)
 
 # ==========================================
-# 4. LOSO TRAINING PIPELINE
+# 4. TRAINING & EVALUATION
 # ==========================================
-def run_loso_triple_fusion():
-    X, y, groups = load_and_fuse_features()
+def train_triple_fusion():
+    (X_train, y_train), (X_val, y_val), (X_test, y_test) = load_and_split_triple_data()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[SYSTEM] Hardware Accelerator: {device}")
-    print("[SYSTEM] Starting 3-Way Fusion LOSO Validation (Max 50 Epochs)...\n")
+    print(f"\n[SYSTEM] Training Triple Fusion Model on {device}...")
     
-    logo = LeaveOneGroupOut()
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_val = scaler.transform(X_val)
+    X_test = scaler.transform(X_test)
     
-    y_true_all = []
-    y_pred_all = []
-    fold_accuracies = []
-    
-    MAX_EPOCHS = 50 
     BATCH_SIZE = 16
+    MAX_EPOCHS = 50
     
-    for fold, (train_val_idx, test_idx) in enumerate(logo.split(X, y, groups)):
-        test_speaker = groups[test_idx[0]]
+    train_loader = DataLoader(TensorDataset(torch.FloatTensor(X_train), torch.LongTensor(y_train)), batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
+    val_loader = DataLoader(TensorDataset(torch.FloatTensor(X_val), torch.LongTensor(y_val)), batch_size=BATCH_SIZE, shuffle=False)
+    test_loader = DataLoader(TensorDataset(torch.FloatTensor(X_test), torch.LongTensor(y_test)), batch_size=BATCH_SIZE, shuffle=False)
+    
+    model = TripleFusionNet(input_dim=X_train.shape[1], num_classes=4).to(device)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.AdamW(model.parameters(), lr=0.0001, weight_decay=0.01)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+    
+    best_val_acc = 0.0
+    model_path = os.path.join(CHECKPOINTS_DIR, "best_fusion_v3.pth")
+    
+    t_losses, v_losses, t_accs, v_accs = [], [], [], []
+    
+    for epoch in range(MAX_EPOCHS):
+        model.train()
+        run_loss, run_corr, total = 0.0, 0, 0
+        for inputs, labels in train_loader:
+            inputs, labels = inputs.to(device), labels.to(device)
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            
+            run_loss += loss.item()
+            _, pred = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            run_corr += (pred == labels).sum().item()
+            
+        t_losses.append(run_loss / len(train_loader))
+        t_accs.append((run_corr / total) * 100)
         
-        # Split Data
-        X_train_val, y_train_val = X[train_val_idx], y[train_val_idx]
-        X_test, y_test = X[test_idx], y[test_idx]
-        
-        # Create early-stopping validation set
-        X_train, X_val, y_train, y_val = train_test_split(
-            X_train_val, y_train_val, test_size=0.15, random_state=42, stratify=y_train_val
-        )
-        
-        # Standardize
-        scaler = StandardScaler()
-        X_train = scaler.fit_transform(X_train)
-        X_val = scaler.transform(X_val)
-        X_test = scaler.transform(X_test)
-        
-        # DataLoaders
-        train_loader = DataLoader(TensorDataset(torch.FloatTensor(X_train), torch.LongTensor(y_train)), batch_size=BATCH_SIZE, shuffle=True)
-        val_loader = DataLoader(TensorDataset(torch.FloatTensor(X_val), torch.LongTensor(y_val)), batch_size=BATCH_SIZE, shuffle=False)
-        test_loader = DataLoader(TensorDataset(torch.FloatTensor(X_test), torch.LongTensor(y_test)), batch_size=BATCH_SIZE, shuffle=False)
-        
-        # Initialize Model (Dynamic input dimension)
-        model = TripleFusionNet(input_dim=X.shape[1], num_classes=4).to(device)
-        criterion = nn.CrossEntropyLoss()
-        optimizer = optim.AdamW(model.parameters(), lr=0.0001, weight_decay=0.01)
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
-        
-        best_val_acc = 0.0
-        fold_model_path = os.path.join(CHECKPOINTS_DIR, f"best_triple_fusion_fold_{fold+1}.pth")
-        
-        # Training Loop
-        for epoch in range(MAX_EPOCHS):
-            model.train()
-            for inputs, labels in train_loader:
+        model.eval()
+        v_loss, v_corr, v_total = 0.0, 0, 0
+        with torch.no_grad():
+            for inputs, labels in val_loader:
                 inputs, labels = inputs.to(device), labels.to(device)
-                optimizer.zero_grad()
                 outputs = model(inputs)
                 loss = criterion(outputs, labels)
-                loss.backward()
-                optimizer.step()
+                v_loss += loss.item()
+                _, pred = torch.max(outputs.data, 1)
+                v_total += labels.size(0)
+                v_corr += (pred == labels).sum().item()
                 
-            model.eval()
-            val_correct, val_total = 0, 0
-            with torch.no_grad():
-                for inputs, labels in val_loader:
-                    inputs, labels = inputs.to(device), labels.to(device)
-                    outputs = model(inputs)
-                    _, predicted = torch.max(outputs.data, 1)
-                    val_total += labels.size(0)
-                    val_correct += (predicted == labels).sum().item()
+        v_acc = (v_corr / v_total) * 100
+        v_losses.append(v_loss / len(val_loader))
+        v_accs.append(v_acc)
+        scheduler.step()
+        
+        if v_acc > best_val_acc:
+            best_val_acc = v_acc
+            torch.save(model.state_dict(), model_path)
             
-            val_acc = (val_correct / val_total) * 100
-            scheduler.step()
+        if (epoch+1) % 10 == 0:
+            print(f"Epoch [{epoch+1:02d}/{MAX_EPOCHS}] | Train Acc: {t_accs[-1]:.2f}% | Val Acc: {v_accs[-1]:.2f}%")
             
-            if val_acc > best_val_acc:
-                best_val_acc = val_acc
-                torch.save(model.state_dict(), fold_model_path)
-                
-        # Test Loop (on the Left-Out Speaker)
-        model.load_state_dict(torch.load(fold_model_path, weights_only=True))
-        model.eval()
-        
-        test_correct, test_total = 0, 0
-        fold_y_true, fold_y_pred = [], []
-        
-        with torch.no_grad():
-            for inputs, labels in test_loader:
-                inputs, labels = inputs.to(device), labels.to(device)
-                outputs = model(inputs)
-                _, predicted = torch.max(outputs.data, 1)
-                
-                fold_y_true.extend(labels.cpu().numpy())
-                fold_y_pred.extend(predicted.cpu().numpy())
-                
-                test_total += labels.size(0)
-                test_correct += (predicted == labels).sum().item()
-                
-        test_acc = (test_correct / test_total) * 100
-        fold_accuracies.append(test_acc)
-        
-        y_true_all.extend(fold_y_true)
-        y_pred_all.extend(fold_y_pred)
-        
-        print(f"Fold {fold+1:02d} | Left-Out Speaker: {test_speaker:<3} | Test Accuracy: {test_acc:.2f}%")
-
-    # ==========================================
-    # 5. FINAL REPORTING
-    # ==========================================
-    print("\n[SYSTEM] Triple Fusion LOSO Validation Complete. Generating Reports...")
-    classes = ['Angry', 'Happy', 'Neutral', 'Sad']
+    print("\n[SYSTEM] Evaluating Best Triple Fusion Model on Held-Out Test Set...")
+    model.load_state_dict(torch.load(model_path, weights_only=True))
+    model.eval()
     
-    cm = confusion_matrix(y_true_all, y_pred_all)
+    y_true, y_pred = [], []
+    with torch.no_grad():
+        for inputs, labels in test_loader:
+            inputs = inputs.to(device)
+            outputs = model(inputs)
+            _, pred = torch.max(outputs.data, 1)
+            y_true.extend(labels.numpy())
+            y_pred.extend(pred.cpu().numpy())
+            
+    generate_reports(y_true, y_pred, t_losses, v_losses, t_accs, v_accs, "v3_triple_fusion")
+
+def generate_reports(y_true, y_pred, tl, vl, ta, va, name):
+    classes = ['Angry', 'Happy', 'Neutral', 'Sad']
+    cm = confusion_matrix(y_true, y_pred)
     plt.figure(figsize=(8, 6))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=classes, yticklabels=classes)
-    plt.title("Triple Fusion (MFCC + Wav2Vec2 + CNN) LOSO - Confusion Matrix")
-    plt.ylabel('Actual Emotion')
-    plt.xlabel('Predicted Emotion')
-    plt.savefig(os.path.join(FIGURES_DIR, "triple_fusion_loso_cm.png"), dpi=300, bbox_inches='tight')
+    plt.title(f"Triple Fusion ({name}) - Confusion Matrix")
+    plt.ylabel('Actual')
+    plt.xlabel('Predicted')
+    plt.savefig(os.path.join(FIGURES_DIR, f"{name}_cm.png"), dpi=300, bbox_inches='tight')
     plt.close()
     
-    final_acc = np.mean(fold_accuracies)
-    report = classification_report(y_true_all, y_pred_all, target_names=classes)
+    epochs = range(1, len(ta) + 1)
+    plt.figure(figsize=(12, 5))
+    plt.subplot(1, 2, 1)
+    plt.plot(epochs, tl, 'b-', label='Train')
+    plt.plot(epochs, vl, 'r-', label='Val')
+    plt.title('Loss')
+    plt.legend()
+    plt.subplot(1, 2, 2)
+    plt.plot(epochs, ta, 'b-', label='Train')
+    plt.plot(epochs, va, 'r-', label='Val')
+    plt.title('Accuracy')
+    plt.legend()
+    plt.savefig(os.path.join(FIGURES_DIR, f"{name}_curves.png"), dpi=300, bbox_inches='tight')
+    plt.close()
     
-    with open(os.path.join(LOGS_DIR, "triple_fusion_loso_report.txt"), "w") as f:
-        f.write("="*50 + "\n")
-        f.write("  TRIPLE FUSION (MFCC + WAV2VEC2 + CNN) LOSO REPORT\n")
-        f.write("="*50 + "\n\n")
-        f.write(f"Average LOSO Accuracy: {final_acc:.2f}%\n\n")
-        f.write("Detailed Metrics:\n")
-        f.write("-" * 50 + "\n")
-        f.write(report)
+    acc = accuracy_score(y_true, y_pred) * 100
+    report = classification_report(y_true, y_pred, target_names=classes)
+    with open(os.path.join(LOGS_DIR, f"{name}_report.txt"), "w") as f:
+        f.write(f"TEST ACCURACY: {acc:.2f}%\n\n{report}")
         
     print("="*50)
-    print(f"FINAL TRIPLE FUSION LOSO ACCURACY: {final_acc:.2f}%")
+    print(f"FINAL TEST ACCURACY: {acc:.2f}%")
     print("="*50)
 
 if __name__ == "__main__":
-    run_loso_triple_fusion()
+    train_triple_fusion()
