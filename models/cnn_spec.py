@@ -20,6 +20,8 @@ from data.augment import AudioAugmenter
 from data.dataset import JordanianSERDataset
 from features.spectrogram import CNNSpectrogramExtractor
 
+from evaluation.plots import plot_confusion_matrix
+from evaluation.metrics import save_classification_report
 
 class EmotionCNN(nn.Module):
     def __init__(self, num_classes=4):
@@ -152,26 +154,18 @@ def run_loso_experiment():
     save_results(y_true_all, y_pred_all, all_fold_results)
 
 def save_results(y_true, y_pred, accs):
-    os.makedirs(os.path.join(parent_dir, "results"), exist_ok=True)
-    os.makedirs(os.path.join(parent_dir, "plots"), exist_ok=True)
+    import numpy as np
     
-    cm = confusion_matrix(y_true, y_pred)
-    plt.figure(figsize=(10, 8))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-    plt.title(f"Overall LOSO Confusion Matrix (Avg Acc: {np.mean(accs):.2f}%)")
-    plt.ylabel('Actual Label')
-    plt.xlabel('Predicted Label')
-    plt.savefig(os.path.join(parent_dir, "plots", "loso_confusion_matrix.png"))
+    print("\n[SYSTEM] Generating final evaluation reports...")
     
-    report = classification_report(y_true, y_pred, target_names=['Angry', 'Happy', 'Neutral', 'Sad'])
-    with open(os.path.join(parent_dir, "results", "loso_report.txt"), "w") as f:
-        f.write(f"Average LOSO Accuracy: {np.mean(accs):.2f}%\n")
-        f.write(f"Standard Deviation: {np.std(accs):.2f}%\n\n")
-        f.write(report)
+    # 1. Generate and save Plots
+    plot_confusion_matrix(y_true, y_pred)
+    
+    # 2. Generate and save Metrics Report
+    save_classification_report(y_true, y_pred)
     
     print("\n" + "="*40)
-    print(f"FINAL LOSO AVG ACCURACY: {np.mean(accs):.2f}%")
-    print("Files saved in project root /results and /plots")
+    print(f"FINAL MODEL AVG ACCURACY: {np.mean(accs):.2f}%")
     print("="*40)
 
 if __name__ == "__main__":
