@@ -12,7 +12,6 @@ from collections import Counter
 
 RANDOM_STATE = 42
 
-
 def get_stratified_speakers(metadata_csv: Path):
     """
     Return three disjoint speaker-id sets for train/val/test.
