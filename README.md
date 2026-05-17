@@ -1,19 +1,27 @@
-# Jordanian Arabic Speech Emotion Recognition
+# Jordanian Arabic Speech Emotion Recognition (SER)
 
-Speaker-independent SER for Jordanian Arabic dialect using a fine-tuned
-Arabic Wav2Vec2 backbone, classical MFCC-based models, and two fusion strategies.
+## Overview
+A speaker-independent SER system for the Jordanian Arabic dialect, 
+evaluating classical ML, CNN, and fine-tuned Wav2Vec 2.0 approaches.
 
-## Results
+## Dataset
+- 2,765 audio samples | 4 emotions (Happy, Sad, Angry, Neutral)
+- 33 speakers (22 male, 11 female)
+- Split: 70% train / 15% val / 15% test (speaker-independent)
 
-| Model | Test Acc | Macro-F1 |
-|---|---|---|
-| Baseline (previous) | 67.36% | — |
-| SVM (MFCC) | — | — |
-| CNN (Mel-spectrogram) | — | — |
-| Wav2Vec2 fine-tuned | — | — |
-| **Fusion v2 (best)** | **—** | **—** |
+## Models & Results
 
-> Fill in results after running the experiments.
+| Model | Test Accuracy | Macro F1 |
+|-------|--------------|----------|
+| KNN (MFCC) | 31.38% | 0.31 |
+| MLP (MFCC) | 38.91% | 0.39 |
+| SVM (MFCC) | 41.42% | 0.40 |
+| CNN (Mel-Spectrogram) | ~40% | — |
+| Wav2Vec2-base + SVM | 45.40% | 0.46 |
+| MFCC + Wav2Vec2 Fusion | 51.05% | 0.51 |
+| Arabic Wav2Vec2 Fine-tuned | 65.90% | 0.65 |
+| **Arabic Wav2Vec2 + Augmentation** | **69.67%** | **0.695** |
+| Strong Fusion (pooled + LogReg) | 67.36% | 0.67 |
 
 ---
 
