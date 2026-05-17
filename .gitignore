@@ -9,6 +9,9 @@ outputs/
 SER_Results/
 wav2vec2_aug_fusion_final/
 
+# Audio Dataset (WAV files)
+*.wav
+
 # Python/cache
 __pycache__/
 .ipynb_checkpoints/
