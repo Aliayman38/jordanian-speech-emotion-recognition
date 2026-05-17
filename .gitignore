@@ -1,13 +1,16 @@
-﻿Dataset/
-*.wav
-*.mp3
+﻿@"
+# Large model checkpoints and experiment outputs
+*.pt
+*.pth
+*.ckpt
+*.pkl
+
+outputs/
+SER_Results/
+wav2vec2_aug_fusion_final/
+
+# Python/cache
 __pycache__/
+.ipynb_checkpoints/
 *.pyc
-.env
-venv/
-outputs/figures/*
-outputs/logs/*
-outputs/checkpoints/*
-!outputs/figures/.gitkeep
-!outputs/logs/.gitkeep
-!outputs/checkpoints/.gitkeep
+"@ | Out-File -Encoding utf8 .gitignore

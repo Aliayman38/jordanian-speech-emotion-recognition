@@ -27,11 +27,11 @@ class JordanianSERDataset(Dataset):
             self._save_metadata()
 
     def _parse_dataset(self):
-        for gender_str in ['Male', 'Female']:
+        for gender_str in ['male', 'female']:
             gender_path = self.data_dir / gender_str
             if not gender_path.exists(): continue
             
-            gender_label = 0 if gender_str == 'Male' else 1
+            gender_label = 0 if gender_str == 'male' else 1
             
             for speaker_folder in os.listdir(gender_path):
                 speaker_path = gender_path / speaker_folder

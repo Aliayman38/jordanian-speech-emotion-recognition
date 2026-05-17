@@ -1,224 +1,203 @@
-import os
-import sys
-import torch
-import torch.nn as nn
-import torch.optim as optim
+# models/fusion_v1.py
+"""
+Fusion v1 — MFCC features + frozen Wav2Vec2 embeddings.
+
+This is the classical fusion pipeline from the second notebook.
+It concatenates MFCC feature vectors with mean+std-pooled Wav2Vec2
+embeddings (from a frozen ``facebook/wav2vec2-base`` backbone), then
+runs a compact validation-based sklearn classifier search.
+
+Optionally blends class probabilities from the classical ensemble and
+the Wav2Vec2 classifier.
+
+Usage
+-----
+    from models.fusion_v1 import build_fusion_features, run_fusion_search
+
+    fusion_data = build_fusion_features(
+        X_train_mfcc_sc, X_val_mfcc_sc, X_test_mfcc_sc,
+        w2v_data,                        # dict from extract_pretrained_embeddings
+    )
+    best_model, best_info, history = run_fusion_search(
+        *fusion_data["MFCC_W2V"], y_train, y_val, "MFCC + Wav2Vec2"
+    )
+"""
+
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-from torch.utils.data import DataLoader, TensorDataset
+from sklearn.decomposition import PCA
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, f1_score
+from sklearn.neural_network import MLPClassifier
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import confusion_matrix, classification_report, accuracy_score
+from sklearn.svm import SVC
 
-# ==========================================
-# 1. PATH CONFIGURATION
-# ==========================================
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.abspath(os.path.join(current_dir, '..'))
-if parent_dir not in sys.path:
-    sys.path.append(parent_dir)
+from config import SEED
 
-from experiments.clusterer import get_stratified_speakers
 
-METADATA_CSV_PATH = os.path.join(parent_dir, "data", "metadata.csv")
-MFCC_CSV_PATH = os.path.join(parent_dir, "outputs", "features", "mfcc_features_loso.csv")
-WAV2VEC_NPY_PATH = os.path.join(parent_dir, "outputs", "features", "wav2vec_features.npy")
-LABELS_PATH = os.path.join(parent_dir, "outputs", "features", "labels.npy")
-SPEAKERS_PATH = os.path.join(parent_dir, "outputs", "features", "speakers.npy")
+# ── Feature set builder ───────────────────────────────────────────────────────
 
-OUTPUT_DIR = os.path.join(parent_dir, "outputs")
-FIGURES_DIR = os.path.join(OUTPUT_DIR, "figures")
-LOGS_DIR = os.path.join(OUTPUT_DIR, "logs")
-CHECKPOINTS_DIR = os.path.join(OUTPUT_DIR, "checkpoints")
+def build_fusion_features(
+    X_tr_mfcc_sc, X_va_mfcc_sc, X_te_mfcc_sc,
+    w2v: dict,
+) -> dict:
+    """
+    Construct all fusion feature sets.
 
-os.makedirs(FIGURES_DIR, exist_ok=True)
-os.makedirs(LOGS_DIR, exist_ok=True)
-os.makedirs(CHECKPOINTS_DIR, exist_ok=True)
+    Parameters
+    ----------
+    X_tr_mfcc_sc, X_va_mfcc_sc, X_te_mfcc_sc : np.ndarray
+        Standardised MFCC feature arrays (fitted on train only).
+    w2v : dict
+        Output of ``extract_pretrained_embeddings`` — keys include
+        ``X_train``, ``X_val``, ``X_test`` (raw embeddings).
 
-# ==========================================
-# 2. DATA LOADING & STRATIFIED SPLIT
-# ==========================================
-def clean_speaker_id(spk_id):
-    try:
-        return int(str(spk_id).split('_')[-1])
-    except ValueError:
-        return hash(spk_id)
+    Returns
+    -------
+    dict mapping feature-set name → (Xtr, Xva, Xte)
+    """
+    # Standardise Wav2Vec2 embeddings on train only
+    from sklearn.preprocessing import StandardScaler
+    w2v_scaler  = StandardScaler()
+    X_tr_w2v_sc = w2v_scaler.fit_transform(w2v["X_train"])
+    X_va_w2v_sc = w2v_scaler.transform(w2v["X_val"])
+    X_te_w2v_sc = w2v_scaler.transform(w2v["X_test"])
 
-def load_and_split_data():
-    print("[SYSTEM] Loading Features and applying 70/15/15 Clusterer Split...")
-    
-    df_mfcc = pd.read_csv(MFCC_CSV_PATH)
-    mfcc_features = df_mfcc.drop(columns=['rel_path', 'label', 'speaker_id', 'gender']).values
-    wav2vec_features = np.load(WAV2VEC_NPY_PATH)
-    labels = np.load(LABELS_PATH)
-    speakers = np.load(SPEAKERS_PATH)
-    
-    # Expected dimensions: 258 + 1024 = 1282
-    fused_features = np.concatenate((mfcc_features, wav2vec_features), axis=1)
-    
-    train_spks_raw, val_spks_raw, test_spks_raw = get_stratified_speakers(METADATA_CSV_PATH)
-    
-    train_spks = [clean_speaker_id(s) for s in train_spks_raw]
-    val_spks = [clean_speaker_id(s) for s in val_spks_raw]
-    test_spks = [clean_speaker_id(s) for s in test_spks_raw]
-    
-    train_idx = np.isin(speakers, train_spks)
-    val_idx = np.isin(speakers, val_spks)
-    test_idx = np.isin(speakers, test_spks)
-    
-    X_train, y_train = fused_features[train_idx], labels[train_idx]
-    X_val, y_val = fused_features[val_idx], labels[val_idx]
-    X_test, y_test = fused_features[test_idx], labels[test_idx]
-    
-    print(f"[INFO] Train Samples: {X_train.shape[0]} | Val Samples: {X_val.shape[0]} | Test Samples: {X_test.shape[0]}")
-    return (X_train, y_train), (X_val, y_val), (X_test, y_test)
+    fusion_sets = {
+        # Wav2Vec2 embeddings only
+        "Wav2Vec2_only": (X_tr_w2v_sc, X_va_w2v_sc, X_te_w2v_sc),
+        # MFCC + Wav2Vec2
+        "MFCC_W2V": (
+            np.concatenate([X_tr_mfcc_sc, X_tr_w2v_sc], axis=1),
+            np.concatenate([X_va_mfcc_sc, X_va_w2v_sc], axis=1),
+            np.concatenate([X_te_mfcc_sc, X_te_w2v_sc], axis=1),
+        ),
+    }
+    print("[INFO] Fusion v1 feature sets:")
+    for k, v in fusion_sets.items():
+        print(f"  {k}: train={v[0].shape}")
+    return fusion_sets
 
-# ==========================================
-# 3. OPTIMIZED NEURAL NETWORK ARCHITECTURE
-# ==========================================
-class OptimizedFusionNet(nn.Module):
-    def __init__(self, input_dim, num_classes=4):
-        super(OptimizedFusionNet, self).__init__()
-        self.network = nn.Sequential(
-            nn.Linear(input_dim, 512),
-            nn.BatchNorm1d(512),
-            nn.ReLU(),
-            nn.Dropout(0.4),
-            
-            nn.Linear(512, 128),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            
-            nn.Linear(128, num_classes)
+
+# ── Candidate pipelines ───────────────────────────────────────────────────────
+
+def _build_candidates(feature_name: str) -> list:
+    base = dict(random_state=SEED)
+    return [
+        (f"{feature_name} | LogReg C=0.5",
+         Pipeline([("sc", StandardScaler()),
+                   ("pca", PCA(n_components=0.95, **base)),
+                   ("clf", LogisticRegression(C=0.5, class_weight="balanced",
+                                              max_iter=4000, **base))])),
+        (f"{feature_name} | LogReg C=1",
+         Pipeline([("sc", StandardScaler()),
+                   ("pca", PCA(n_components=0.95, **base)),
+                   ("clf", LogisticRegression(C=1.0, class_weight="balanced",
+                                              max_iter=4000, **base))])),
+        (f"{feature_name} | SVM C=1",
+         Pipeline([("sc", StandardScaler()),
+                   ("pca", PCA(n_components=0.95, **base)),
+                   ("clf", SVC(kernel="rbf", C=1, gamma="scale",
+                               class_weight="balanced", probability=True, **base))])),
+        (f"{feature_name} | SVM C=3",
+         Pipeline([("sc", StandardScaler()),
+                   ("pca", PCA(n_components=0.95, **base)),
+                   ("clf", SVC(kernel="rbf", C=3, gamma="scale",
+                               class_weight="balanced", probability=True, **base))])),
+        (f"{feature_name} | MLP",
+         Pipeline([("sc", StandardScaler()),
+                   ("pca", PCA(n_components=0.95, **base)),
+                   ("clf", MLPClassifier(hidden_layer_sizes=(256, 128),
+                                         alpha=1e-2, learning_rate_init=5e-4,
+                                         max_iter=500, early_stopping=True,
+                                         validation_fraction=0.15,
+                                         n_iter_no_change=20, **base))])),
+    ]
+
+
+# ── Validation-based search ───────────────────────────────────────────────────
+
+def run_fusion_search(
+    X_tr, X_va, X_te,
+    y_tr, y_va,
+    feature_name: str,
+) -> tuple:
+    """
+    Train all candidates and pick the best by validation score.
+
+    Returns
+    -------
+    (best_clf, best_info_dict, history_df)
+    """
+    candidates = _build_candidates(feature_name)
+    rows = []
+    best_clf, best_info = None, None
+
+    print(f"\n{'=' * 80}")
+    print(f"  Fusion v1 Search: {feature_name}")
+    print(f"{'=' * 80}")
+
+    for i, (name, clf) in enumerate(candidates, 1):
+        clf.fit(X_tr, y_tr)
+        tr_acc = accuracy_score(y_tr, clf.predict(X_tr))
+        va_acc = accuracy_score(y_va, clf.predict(X_va))
+        tr_f1  = f1_score(y_tr, clf.predict(X_tr), average="macro", zero_division=0)
+        va_f1  = f1_score(y_va, clf.predict(X_va), average="macro", zero_division=0)
+        gap    = tr_acc - va_acc
+        score  = va_acc - 0.10 * max(0, gap - 0.30)
+
+        row = dict(feature_set=feature_name, candidate=name,
+                   train_acc=tr_acc, val_acc=va_acc,
+                   train_f1=tr_f1,   val_f1=va_f1,
+                   gap=gap, score=score)
+        rows.append(row)
+
+        print(
+            f"  {i:02d}/{len(candidates)} | Val={va_acc:.2%} | "
+            f"Train={tr_acc:.2%} | Gap={gap:.2%} | {name}"
         )
 
-    def forward(self, x):
-        return self.network(x)
+        if best_info is None or score > best_info["score"]:
+            best_info = row
+            best_clf  = clf
 
-# ==========================================
-# 4. TRAINING & EVALUATION PIPELINE
-# ==========================================
-def train_and_evaluate():
-    (X_train, y_train), (X_val, y_val), (X_test, y_test) = load_and_split_data()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"\n[SYSTEM] Training Combined Model on {device}...")
-    
-    scaler = StandardScaler()
-    X_train = scaler.fit_transform(X_train)
-    X_val = scaler.transform(X_val)
-    X_test = scaler.transform(X_test)
-    
-    BATCH_SIZE = 16
-    MAX_EPOCHS = 40
-    
-    train_loader = DataLoader(TensorDataset(torch.FloatTensor(X_train), torch.LongTensor(y_train)), batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
-    val_loader = DataLoader(TensorDataset(torch.FloatTensor(X_val), torch.LongTensor(y_val)), batch_size=BATCH_SIZE, shuffle=False)
-    test_loader = DataLoader(TensorDataset(torch.FloatTensor(X_test), torch.LongTensor(y_test)), batch_size=BATCH_SIZE, shuffle=False)
-    
-    model = OptimizedFusionNet(input_dim=X_train.shape[1], num_classes=4).to(device)
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.AdamW(model.parameters(), lr=0.0001, weight_decay=0.05)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
-    
-    best_val_acc = 0.0
-    model_path = os.path.join(CHECKPOINTS_DIR, "best_fusion_v2.pth")
-    
-    t_losses, v_losses, t_accs, v_accs = [], [], [], []
-    
-    for epoch in range(MAX_EPOCHS):
-        model.train()
-        run_loss, run_corr, total = 0.0, 0, 0
-        for inputs, labels in train_loader:
-            inputs, labels = inputs.to(device), labels.to(device)
-            optimizer.zero_grad()
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
-            
-            run_loss += loss.item()
-            _, pred = torch.max(outputs.data, 1)
-            total += labels.size(0)
-            run_corr += (pred == labels).sum().item()
-            
-        t_losses.append(run_loss / len(train_loader))
-        t_accs.append((run_corr / total) * 100)
-        
-        model.eval()
-        v_loss, v_corr, v_total = 0.0, 0, 0
-        with torch.no_grad():
-            for inputs, labels in val_loader:
-                inputs, labels = inputs.to(device), labels.to(device)
-                outputs = model(inputs)
-                loss = criterion(outputs, labels)
-                v_loss += loss.item()
-                _, pred = torch.max(outputs.data, 1)
-                v_total += labels.size(0)
-                v_corr += (pred == labels).sum().item()
-                
-        v_acc = (v_corr / v_total) * 100
-        v_losses.append(v_loss / len(val_loader))
-        v_accs.append(v_acc)
-        scheduler.step()
-        
-        if v_acc > best_val_acc:
-            best_val_acc = v_acc
-            torch.save(model.state_dict(), model_path)
-            
-        if (epoch+1) % 5 == 0 or epoch == 0:
-            print(f"Epoch [{epoch+1:02d}/{MAX_EPOCHS}] | Train Acc: {t_accs[-1]:.2f}% | Val Acc: {v_accs[-1]:.2f}%")
-            
-    print("\n[SYSTEM] Evaluating Best Model on Held-Out Test Set...")
-    model.load_state_dict(torch.load(model_path, weights_only=True))
-    model.eval()
-    
-    y_true, y_pred = [], []
-    with torch.no_grad():
-        for inputs, labels in test_loader:
-            inputs = inputs.to(device)
-            outputs = model(inputs)
-            _, pred = torch.max(outputs.data, 1)
-            y_true.extend(labels.numpy())
-            y_pred.extend(pred.cpu().numpy())
-            
-    generate_reports(y_true, y_pred, t_losses, v_losses, t_accs, v_accs, "v2_combined")
+    return best_clf, best_info, pd.DataFrame(rows).sort_values("score", ascending=False)
 
-def generate_reports(y_true, y_pred, tl, vl, ta, va, name):
-    classes = ['Angry', 'Happy', 'Neutral', 'Sad']
-    cm = confusion_matrix(y_true, y_pred)
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=classes, yticklabels=classes)
-    plt.title(f"Fusion ({name}) - Confusion Matrix")
-    plt.ylabel('Actual')
-    plt.xlabel('Predicted')
-    plt.savefig(os.path.join(FIGURES_DIR, f"{name}_cm.png"), dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    epochs = range(1, len(ta) + 1)
-    plt.figure(figsize=(12, 5))
-    plt.subplot(1, 2, 1)
-    plt.plot(epochs, tl, 'b-', label='Train')
-    plt.plot(epochs, vl, 'r-', label='Val')
-    plt.title('Loss')
-    plt.legend()
-    plt.subplot(1, 2, 2)
-    plt.plot(epochs, ta, 'b-', label='Train')
-    plt.plot(epochs, va, 'r-', label='Val')
-    plt.title('Accuracy')
-    plt.legend()
-    plt.savefig(os.path.join(FIGURES_DIR, f"{name}_curves.png"), dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    acc = accuracy_score(y_true, y_pred) * 100
-    report = classification_report(y_true, y_pred, target_names=classes)
-    with open(os.path.join(LOGS_DIR, f"{name}_report.txt"), "w") as f:
-        f.write(f"TEST ACCURACY: {acc:.2f}%\n\n{report}")
-        
-    print("="*50)
-    print(f"FINAL TEST ACCURACY: {acc:.2f}%")
-    print("="*50)
 
-if __name__ == "__main__":
-    train_and_evaluate()
+# ── Optional probability-level ensemble ───────────────────────────────────────
+
+def probability_blend_search(
+    p_val_w2v,   p_test_w2v,   y_val,   y_test,
+    p_val_clf,   p_test_clf,
+) -> tuple:
+    """
+    Grid-search over blending weights ``w`` ∈ [0, 1] (step 0.05) where
+    the blended prediction is ``w * Wav2Vec2 + (1-w) * classical``.
+    Model selection is strictly on validation — test is never touched.
+
+    Returns
+    -------
+    (best_info_dict, best_test_predictions)
+    """
+    best_score, best_info, best_pred = -1.0, None, None
+
+    for w in np.arange(0.0, 1.05, 0.05):
+        p_va_mix = w * p_val_w2v  + (1 - w) * p_val_clf
+        p_te_mix = w * p_test_w2v + (1 - w) * p_test_clf
+
+        va_pred  = np.argmax(p_va_mix, axis=1)
+        te_pred  = np.argmax(p_te_mix, axis=1)
+
+        va_acc = accuracy_score(y_val,  va_pred)
+        va_f1  = f1_score(y_val,  va_pred, average="macro", zero_division=0)
+        te_acc = accuracy_score(y_test, te_pred)
+        score  = va_f1 + 0.25 * va_acc
+
+        if score > best_score:
+            best_score = score
+            best_info  = dict(weight_w2v=w, weight_clf=round(1 - w, 2),
+                              val_acc=va_acc, val_f1=va_f1, test_acc=te_acc)
+            best_pred  = te_pred
+
+    return best_info, best_pred

@@ -1,315 +1,344 @@
+# models/classical.py
 """
-Speech Emotion Recognition — Final Classical ML Pipeline (Tuned LOSO)
-Jordanian Arabic Dialect | MFCC Handcrafted Features
+Classical sklearn models for MFCC-based SER.
 
-Tuning protocol:
-- Hyperparameters were selected using speaker-based cluster split:
-  Train speakers = 23
-  Validation speakers = 5
-  Test speakers = 5
-
-Final evaluation:
-- Leave-One-Speaker-Out (LOSO) over all speakers
-- StandardScaler is fitted inside each fold only
-- No data leakage
-
-Run:
-python models/classical.py
+Includes
+--------
+* ``build_svm_candidates``   — SVM pipeline grid
+* ``build_knn_candidates``   — KNN pipeline grid
+* ``build_mlp_candidates``   — MLPClassifier pipeline grid
+* ``build_extra_candidates`` — LogReg + ExtraTrees baselines
+* ``quick_search``           — validation-based model selection
+* ``build_soft_ensemble``    — validation-weighted soft-voting ensemble
+* ``MLP``                    — custom PyTorch MLP (used for deep training)
+* ``train_pytorch_mlp``      — training loop for the PyTorch MLP
 """
 
-from __future__ import annotations
-
-import json
-import logging
-import sys
-import time
-import warnings
-from pathlib import Path
+import os
+import pickle
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from sklearn.decomposition import PCA
+from sklearn.ensemble import ExtraTreesClassifier, VotingClassifier
+from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
+from torch.utils.data import DataLoader
 
-warnings.filterwarnings("ignore")
-
-ROOT = Path(__file__).resolve().parent.parent
-FEATURES_CSV = ROOT / "outputs" / "features" / "mfcc_features_loso.csv"
-RESULTS_DIR = ROOT / "outputs" / "results" / "classical_mfcc_loso_tuned"
-
-RANDOM_STATE = 42
-META_COLS = {"label", "speaker_id", "gender", "rel_path"}
-EMOTION_NAMES = ["Happy", "Sad", "Angry", "Neutral"]
+from config import CLF_BATCH_SIZE, CLF_PATIENCE, LR, MLP_EPOCHS, NUM_CLASSES, SEED, device
 
 
-TUNED_PARAMS = {
-    "svm": {
-        "C": 5,
-        "gamma": "scale",
-    },
-    "knn": {
-        "metric": "manhattan",
-        "n_neighbors": 5,
-        "weights": "distance",
-    },
-    "mlp": {
-        "hidden_layer_sizes": (256,),
-        "alpha": 0.0001,
-        "learning_rate_init": 0.001,
-    },
-}
+# ── Pipeline builder helpers ──────────────────────────────────────────────────
+
+def _make_steps(use_scaler: bool, reducer_type=None, reducer_value=None) -> list:
+    """Build the pre-processing steps for a sklearn Pipeline."""
+    steps = []
+    if use_scaler:
+        steps.append(("scaler", StandardScaler()))
+    if reducer_type == "pca":
+        steps.append(("reduce", PCA(n_components=reducer_value, random_state=SEED)))
+    elif reducer_type == "kbest":
+        steps.append(("reduce", SelectKBest(score_func=f_classif, k=reducer_value)))
+    return steps
 
 
-def get_logger() -> logging.Logger:
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+# ── Candidate grids ───────────────────────────────────────────────────────────
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)-8s | %(message)s",
-        datefmt="%H:%M:%S",
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler(RESULTS_DIR / "run.log", encoding="utf-8"),
-        ],
-    )
-
-    return logging.getLogger("SER_TUNED_LOSO")
-
-
-def load_data(log: logging.Logger):
-    if not FEATURES_CSV.exists():
-        raise FileNotFoundError(f"Feature file not found: {FEATURES_CSV}")
-
-    df = pd.read_csv(FEATURES_CSV).dropna()
-    feature_cols = [c for c in df.columns if c not in META_COLS]
-
-    X = df[feature_cols].to_numpy(dtype=np.float32)
-    y = df["label"].to_numpy(dtype=int)
-    speakers = df["speaker_id"].to_numpy()
-
-    log.info(f"Dataset  : {X.shape[0]:,} samples x {X.shape[1]} features")
-    log.info(f"Speakers : {np.unique(speakers).tolist()}")
-    log.info(f"Classes  : { {i: int((y == i).sum()) for i in range(4)} }")
-
-    return X, y, speakers
+def build_svm_candidates(n_features: int, use_scaler: bool = True) -> list:
+    candidates = []
+    for reducer_type, reducer_value in [
+        (None, None), ("pca", 0.90), ("pca", 0.95),
+        ("kbest", 80), ("kbest", 120), ("kbest", 160),
+    ]:
+        for C, gamma in [
+            (0.1, "scale"), (0.5, "scale"), (1, "scale"),
+            (2,   "scale"), (5,   "scale"),
+            (1, 0.01),      (1, 0.005),     (2, 0.005),
+        ]:
+            k = min(reducer_value, n_features) if isinstance(reducer_value, int) else reducer_value
+            steps = _make_steps(use_scaler, reducer_type, k)
+            steps.append(("clf", SVC(
+                kernel="rbf", C=C, gamma=gamma,
+                class_weight="balanced", probability=True, random_state=SEED,
+            )))
+            candidates.append({
+                "name":  f"SVM | reduce={reducer_type}:{reducer_value} | C={C} | gamma={gamma}",
+                "model": Pipeline(steps),
+            })
+    return candidates[:36]          # keep grid compact
 
 
-def build_models():
-    return {
-        "svm": Pipeline([
-            ("scaler", StandardScaler()),
-            ("clf", SVC(
-                kernel="rbf",
-                C=TUNED_PARAMS["svm"]["C"],
-                gamma=TUNED_PARAMS["svm"]["gamma"],
-                class_weight="balanced",
-                random_state=RANDOM_STATE,
-            )),
-        ]),
-
-        "knn": Pipeline([
-            ("scaler", StandardScaler()),
-            ("clf", KNeighborsClassifier(
-                n_neighbors=TUNED_PARAMS["knn"]["n_neighbors"],
-                weights=TUNED_PARAMS["knn"]["weights"],
-                metric=TUNED_PARAMS["knn"]["metric"],
-                n_jobs=-1,
-            )),
-        ]),
-
-        "mlp": Pipeline([
-            ("scaler", StandardScaler()),
-            ("clf", MLPClassifier(
-                hidden_layer_sizes=TUNED_PARAMS["mlp"]["hidden_layer_sizes"],
-                alpha=TUNED_PARAMS["mlp"]["alpha"],
-                learning_rate_init=TUNED_PARAMS["mlp"]["learning_rate_init"],
-                activation="relu",
-                solver="adam",
-                batch_size=64,
-                max_iter=500,
-                early_stopping=True,
-                validation_fraction=0.1,
-                n_iter_no_change=15,
-                random_state=RANDOM_STATE,
-            )),
-        ]),
-    }
+def build_knn_candidates(n_features: int, use_scaler: bool = True) -> list:
+    candidates = []
+    for reducer_type, reducer_value in [
+        ("pca", 0.90), ("pca", 0.95),
+        ("kbest", 80), ("kbest", 120), ("kbest", 160),
+    ]:
+        for n, metric, weights in [
+            (3, "manhattan", "distance"), (5, "manhattan", "distance"),
+            (7, "manhattan", "distance"), (9, "manhattan", "distance"),
+            (5, "cosine",    "distance"), (7, "cosine",    "distance"),
+        ]:
+            k = min(reducer_value, n_features) if isinstance(reducer_value, int) else reducer_value
+            steps = _make_steps(use_scaler, reducer_type, k)
+            steps.append(("clf", KNeighborsClassifier(
+                n_neighbors=n, metric=metric, weights=weights,
+            )))
+            candidates.append({
+                "name":  f"KNN | reduce={reducer_type}:{reducer_value} | n={n} | metric={metric}",
+                "model": Pipeline(steps),
+            })
+    return candidates[:24]
 
 
-def run_loso(name, model, X, y, speakers, log):
-    unique_speakers = np.unique(speakers)
+def build_mlp_candidates(n_features: int, use_scaler: bool = True) -> list:
+    candidates = []
+    for reducer_type, reducer_value in [
+        ("pca", 0.90), ("pca", 0.95), ("kbest", 120), ("kbest", 160),
+    ]:
+        for hidden, alpha, lr in [
+            ((64,),       1e-2, 1e-3),
+            ((128,),      1e-2, 1e-3),
+            ((256,),      1e-3, 1e-3),
+            ((128, 64),   1e-2, 5e-4),
+            ((256, 128),  1e-2, 5e-4),
+        ]:
+            k = min(reducer_value, n_features) if isinstance(reducer_value, int) else reducer_value
+            steps = _make_steps(use_scaler, reducer_type, k)
+            steps.append(("clf", MLPClassifier(
+                hidden_layer_sizes=hidden, alpha=alpha,
+                learning_rate_init=lr, activation="relu", solver="adam",
+                batch_size=64, max_iter=400,
+                early_stopping=True, validation_fraction=0.15,
+                n_iter_no_change=20, random_state=SEED,
+            )))
+            candidates.append({
+                "name":  f"MLP | reduce={reducer_type}:{reducer_value} | hidden={hidden} | alpha={alpha}",
+                "model": Pipeline(steps),
+            })
+    return candidates[:20]
 
-    fold_rows = []
-    all_true = []
-    all_pred = []
 
-    log.info("\n" + "─" * 70)
-    log.info(f"{name.upper()} | Tuned LOSO | {len(unique_speakers)} folds")
-    log.info("─" * 70)
-
-    for fold, test_speaker in enumerate(unique_speakers, start=1):
-        train_mask = speakers != test_speaker
-        test_mask = speakers == test_speaker
-
-        X_train, y_train = X[train_mask], y[train_mask]
-        X_test, y_test = X[test_mask], y[test_mask]
-
-        start = time.time()
-        model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
-        elapsed = time.time() - start
-
-        acc = accuracy_score(y_test, y_pred)
-
-        fold_rows.append({
-            "fold": fold,
-            "test_speaker": int(test_speaker),
-            "n_train": int(len(y_train)),
-            "n_test": int(len(y_test)),
-            "accuracy": round(float(acc), 4),
-            "time_sec": round(elapsed, 2),
+def build_extra_candidates(n_features: int, use_scaler: bool = True) -> list:
+    candidates = []
+    k = min(160, n_features)
+    for C in [0.1, 0.5, 1, 2]:
+        steps = _make_steps(use_scaler, "kbest", k)
+        steps.append(("clf", LogisticRegression(
+            C=C, class_weight="balanced", solver="lbfgs",
+            max_iter=3000, random_state=SEED,
+        )))
+        candidates.append({
+            "name":  f"LogReg | SelectKBest={k} | C={C}",
+            "model": Pipeline(steps),
         })
-
-        all_true.extend(y_test)
-        all_pred.extend(y_pred)
-
-        log.info(
-            f"Fold {fold:02d}/{len(unique_speakers)} | "
-            f"Speaker {test_speaker:<3} | "
-            f"n_train={len(y_train):>4} | "
-            f"n_test={len(y_test):>3} | "
-            f"Acc={acc:.4f} | "
-            f"{elapsed:.1f}s"
-        )
-
-    fold_accs = [r["accuracy"] for r in fold_rows]
-
-    mean_acc = float(np.mean(fold_accs))
-    std_acc = float(np.std(fold_accs))
-    overall_acc = accuracy_score(all_true, all_pred)
-
-    report = classification_report(
-        all_true,
-        all_pred,
-        target_names=EMOTION_NAMES,
-        digits=4,
-        zero_division=0,
-    )
-
-    cm = confusion_matrix(all_true, all_pred)
-
-    log.info(f"\n{name.upper()} RESULTS")
-    log.info(f"Mean LOSO Accuracy    : {mean_acc:.4f} +/- {std_acc:.4f}")
-    log.info(f"Overall Sample Accuracy: {overall_acc:.4f}")
-
-    for line in report.splitlines():
-        log.info("  " + line)
-
-    return {
-        "model": name,
-        "tuned_params": TUNED_PARAMS[name],
-        "mean_loso_accuracy": round(mean_acc, 4),
-        "std_loso_accuracy": round(std_acc, 4),
-        "overall_sample_accuracy": round(float(overall_acc), 4),
-        "best_fold": max(fold_accs),
-        "worst_fold": min(fold_accs),
-        "n_folds": len(fold_rows),
-        "fold_results": fold_rows,
-        "classification_report": report,
-        "confusion_matrix": cm.tolist(),
-    }
+    for n_est, leaf in [(600, 2), (800, 4)]:
+        candidates.append({
+            "name":  f"ExtraTrees | {n_est} trees | leaf={leaf}",
+            "model": ExtraTreesClassifier(
+                n_estimators=n_est, min_samples_leaf=leaf,
+                class_weight="balanced", random_state=SEED, n_jobs=-1,
+            ),
+        })
+    return candidates
 
 
-def save_model_results(result, log):
-    model_dir = RESULTS_DIR / result["model"]
-    model_dir.mkdir(parents=True, exist_ok=True)
+# ── Validation-based model selection ─────────────────────────────────────────
 
-    pd.DataFrame(result["fold_results"]).to_csv(
-        model_dir / "fold_results.csv",
-        index=False,
-    )
+def quick_search(
+    model_name: str,
+    candidates: list,
+    X_tr, y_tr,
+    X_vl, y_vl,
+    overfitting_penalty: float = 0.10,
+    gap_threshold:       float = 0.30,
+) -> tuple:
+    """
+    Train every candidate, score by validation accuracy (with a light
+    penalty for large train-val gaps), and return the best one.
 
-    pd.DataFrame(
-        result["confusion_matrix"],
-        index=[f"True_{e}" for e in EMOTION_NAMES],
-        columns=[f"Pred_{e}" for e in EMOTION_NAMES],
-    ).to_csv(model_dir / "confusion_matrix.csv")
+    Returns
+    -------
+    (best_model, best_info_dict, history_df)
+    """
+    print(f"\n{'#' * 70}")
+    print(f"  Searching {model_name}  ({len(candidates)} candidates)")
+    print(f"{'#' * 70}")
 
-    with open(model_dir / "classification_report.txt", "w", encoding="utf-8") as f:
-        f.write(result["classification_report"])
-
-    json_payload = {
-        k: v for k, v in result.items()
-        if k not in {"classification_report", "confusion_matrix"}
-    }
-
-    with open(model_dir / "results.json", "w", encoding="utf-8") as f:
-        json.dump(json_payload, f, indent=2)
-
-    log.info(f"Saved {result['model'].upper()} results -> {model_dir}")
-
-
-def save_summary(results, log):
+    best_model, best_info = None, None
     rows = []
 
-    for r in results:
-        rows.append({
-            "model": r["model"].upper(),
-            "mean_loso_accuracy": r["mean_loso_accuracy"],
-            "std_loso_accuracy": r["std_loso_accuracy"],
-            "overall_sample_accuracy": r["overall_sample_accuracy"],
-            "best_fold": r["best_fold"],
-            "worst_fold": r["worst_fold"],
-            "n_folds": r["n_folds"],
-            "tuned_params": str(r["tuned_params"]),
-        })
+    for i, item in enumerate(candidates, 1):
+        name  = item["name"]
+        model = item["model"]
+        model.fit(X_tr, y_tr)
 
-    summary = pd.DataFrame(rows).sort_values(
-        "mean_loso_accuracy",
-        ascending=False,
+        tr_acc = accuracy_score(y_tr, model.predict(X_tr))
+        va_acc = accuracy_score(y_vl, model.predict(X_vl))
+        gap    = tr_acc - va_acc
+        score  = va_acc - overfitting_penalty * max(0, gap - gap_threshold)
+
+        row = dict(candidate=name, train_acc=tr_acc, val_acc=va_acc,
+                   gap=gap, score=score)
+        rows.append(row)
+
+        print(
+            f"  {i:02d}/{len(candidates)} | Val={va_acc:.2%} | "
+            f"Train={tr_acc:.2%} | Gap={gap:.2%} | Score={score:.4f} | {name}"
+        )
+
+        if best_info is None or score > best_info["score"]:
+            best_model = model
+            best_info  = row
+
+    print("\n  [BEST]", best_info)
+    return best_model, best_info, pd.DataFrame(rows).sort_values("score", ascending=False)
+
+
+# ── Soft-voting ensemble ──────────────────────────────────────────────────────
+
+def build_soft_ensemble(named_results: dict, X_tr, y_tr):
+    """
+    Fit a ``VotingClassifier`` (soft) using the best per-model classifiers,
+    weighted by their validation accuracy.
+
+    Parameters
+    ----------
+    named_results : dict
+        ``{ name: (fitted_model, val_acc) }``
+    X_tr, y_tr : training features / labels
+
+    Returns
+    -------
+    fitted VotingClassifier
+    """
+    estimators = []
+    weights    = []
+    for name, (model, val_acc) in named_results.items():
+        estimators.append((name, model))
+        weights.append(max(1.0, val_acc * 10))
+
+    vc = VotingClassifier(estimators=estimators, voting="soft", weights=weights)
+    vc.fit(X_tr, y_tr)
+    return vc
+
+
+# ── PyTorch MLP (deep variant) ────────────────────────────────────────────────
+
+class MLP(nn.Module):
+    """
+    Simple fully-connected network for tabular feature vectors.
+
+    Parameters
+    ----------
+    input_dim : int
+    hidden_dims : tuple of int
+    num_classes : int
+    dropout : float
+    """
+
+    def __init__(
+        self,
+        input_dim:   int,
+        hidden_dims: tuple = (256, 128, 64),
+        num_classes: int   = NUM_CLASSES,
+        dropout:     float = 0.3,
+    ) -> None:
+        super().__init__()
+        layers, prev = [], input_dim
+        for h in hidden_dims:
+            layers += [nn.Linear(prev, h), nn.BatchNorm1d(h), nn.ReLU(), nn.Dropout(dropout)]
+            prev = h
+        layers.append(nn.Linear(prev, num_classes))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
+def train_pytorch_mlp(
+    X_tr, y_tr,
+    X_vl, y_vl,
+    epochs:   int   = MLP_EPOCHS,
+    patience: int   = CLF_PATIENCE,
+    lr:       float = LR,
+    batch:    int   = CLF_BATCH_SIZE,
+) -> tuple:
+    """
+    Train the PyTorch :class:`MLP` with Adam, step-LR decay, and early stopping.
+
+    Returns
+    -------
+    (model, history_dict, best_epoch)
+    """
+    Xt = torch.FloatTensor(X_tr)
+    yt = torch.LongTensor(y_tr)
+    Xv = torch.FloatTensor(X_vl)
+    yv = torch.LongTensor(y_vl)
+
+    loader = DataLoader(
+        torch.utils.data.TensorDataset(Xt, yt),
+        batch_size=batch, shuffle=True, drop_last=True,
     )
 
-    summary.to_csv(RESULTS_DIR / "summary.csv", index=False)
+    model  = MLP(Xt.shape[1]).to(device)
+    opt    = optim.Adam(model.parameters(), lr=lr, weight_decay=1e-2)
+    sched  = optim.lr_scheduler.StepLR(opt, step_size=30, gamma=0.5)
+    crit   = nn.CrossEntropyLoss()
+    hist   = {"train_acc": [], "val_acc": [], "train_loss": [], "val_loss": []}
 
-    log.info("\n" + "=" * 80)
-    log.info("FINAL TUNED LOSO SUMMARY")
-    log.info("=" * 80)
-    log.info(summary)
-    log.info(f"Summary saved -> {RESULTS_DIR / 'summary.csv'}")
+    best_val, patience_cnt, best_state, best_ep = 0.0, 0, None, 1
 
+    print(f"{'Ep':>5} {'TrLoss':>8} {'TrAcc':>8} {'ValLoss':>8} {'ValAcc':>8}")
+    print("-" * 45)
 
-def main():
-    log = get_logger()
+    for ep in range(epochs):
+        model.train()
+        tl, tc, tn = 0.0, 0, 0
+        for xb, yb in loader:
+            xb, yb = xb.to(device), yb.to(device)
+            opt.zero_grad()
+            out  = model(xb)
+            loss = crit(out, yb)
+            loss.backward()
+            opt.step()
+            tl += loss.item() * len(yb)
+            tc += (out.argmax(1) == yb).sum().item()
+            tn += len(yb)
+        sched.step()
+        tl /= tn;  ta = tc / tn
 
-    log.info("=" * 80)
-    log.info("SER Classical ML Pipeline | Tuned LOSO Final Evaluation")
-    log.info("=" * 80)
-    log.info("Tuning source: speaker-based cluster split")
-    log.info("Cluster tuning split: Train=23 speakers, Val=5 speakers, Test=5 speakers")
-    log.info(f"Tuned parameters: {TUNED_PARAMS}")
+        model.eval()
+        with torch.no_grad():
+            vo = model(Xv.to(device))
+            vl = crit(vo, yv.to(device)).item()
+            va = (vo.argmax(1).cpu() == yv).float().mean().item()
 
-    X, y, speakers = load_data(log)
-    models = build_models()
+        hist["train_loss"].append(tl); hist["train_acc"].append(ta)
+        hist["val_loss"].append(vl);   hist["val_acc"].append(va)
 
-    results = []
-    start_all = time.time()
+        if va > best_val:
+            best_val, patience_cnt = va, 0
+            best_state = {k: v.clone() for k, v in model.state_dict().items()}
+            best_ep = ep + 1
+        else:
+            patience_cnt += 1
 
-    for name, model in models.items():
-        start = time.time()
-        result = run_loso(name, model, X, y, speakers, log)
-        save_model_results(result, log)
-        results.append(result)
-        log.info(f"{name.upper()} finished in {time.time() - start:.1f}s")
+        if (ep + 1) % 10 == 0 or ep == 0:
+            print(f"{ep+1:5d} {tl:8.4f} {ta:8.2%} {vl:8.4f} {va:8.2%}")
 
-    save_summary(results, log)
+        if patience_cnt >= patience:
+            print(f"  Early stopping at epoch {ep + 1} (best={best_ep})")
+            break
 
-    log.info(f"\nDone. Total time: {time.time() - start_all:.1f}s")
-    log.info(f"Results -> {RESULTS_DIR}")
-
-
-if __name__ == "__main__":
-    main()
+    model.load_state_dict(best_state)
+    return model, hist, best_ep

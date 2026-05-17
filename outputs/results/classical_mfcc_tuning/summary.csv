@@ -1,4 +1,0 @@
-model,best_val_acc,test_acc,best_params
-SVM,0.7373,0.7157,"{'C': 5, 'gamma': 'scale'}"
-MLP,0.7181,0.6747,"{'alpha': 0.0001, 'hidden_layer_sizes': (256,), 'learning_rate_init': 0.001}"
-KNN,0.6916,0.694,"{'metric': 'manhattan', 'n_neighbors': 5, 'weights': 'distance'}"

@@ -1,4 +1,0 @@
-model,mean_acc,std_acc,best_fold,worst_fold,n_folds
-SVM,0.4234,0.1638,0.8718,0.08,33
-MLP,0.4223,0.1413,0.8718,0.12,33
-KNN,0.4045,0.1191,0.6267,0.0645,33
